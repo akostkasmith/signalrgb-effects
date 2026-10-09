@@ -44,6 +44,19 @@ Tuned on psytrance, but it works with any music.
 
 It runs effects the way SignalRGB does. Each effect loads unmodified into a 320 × 200 canvas, and every virtual LED samples its own spot on that canvas. Audio comes from built-in demo tracks or from a music file of your own, converted to the same data format SignalRGB hands effects. You can record a WebM clip of the view to share.
 
+### Preview the effects you already have
+
+Open **Load effects from your PC** under the effect picker and choose a folder:
+
+- `%LOCALAPPDATA%\WhirlwindFX\SignalRgb\cache\effects` holds the library effects SignalRGB has downloaded for you.
+- `%USERPROFILE%\Documents\WhirlwindFX\Effects` holds your own and sideloaded effects.
+
+Paste either path into the folder dialog's address bar. The effects appear under "From your PC" in the list. They are read in your browser only: nothing is uploaded, and none of them are included in this repo.
+
+The simulator provides what SignalRGB gives effects: settings as globals, the `on<setting>Changed()` and `onEngineReady()` hooks, and audio. Effects built on screen capture, game integrations or hardware sensors load, but have nothing to react to here, so they look static or dark.
+
+### Run it locally
+
 To run it locally, serve the folder with any static file server (opening `index.html` directly from disk will not load the effect), for example:
 
 ```bash
@@ -60,6 +73,7 @@ Measured on a real SignalRGB install, which differs from the official docs:
 - `engine.audio.level` stays between about -8 and 0 dB while music plays and drops to `-Infinity` in silence. It works as a silence detector but not as a loudness meter.
 - Effects run in Ultralight (WebKit), not Chromium. Canvas `shadowBlur` is very slow there; use layered fills or radial gradients for glows.
 - Each `<meta property>` becomes a global variable, so don't give a function or variable the same name as a setting.
+- SignalRGB calls `on<setting>Changed()` when a setting changes and `onEngineReady()` once the engine is up. Many library effects work out colours inside those hooks, or only start drawing from `onEngineReady()`.
 
 ## License
 

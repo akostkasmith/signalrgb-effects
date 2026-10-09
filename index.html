@@ -94,6 +94,14 @@
 
   .error { color: var(--warn); }
 
+  .loader { border: 1px solid var(--line); border-radius: 6px; background: var(--raised); }
+  .loader summary { cursor: pointer; padding: 8px 10px; font: 500 13px var(--font-body); }
+  .loader-body { display: flex; flex-direction: column; gap: 10px; padding: 0 10px 12px; min-width: 0; }
+  .paths { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; }
+  .paths code { font: 11.5px var(--font-mono); color: var(--fg); overflow-wrap: anywhere; min-width: 0; }
+  .paths .note { grid-column: 1 / -1; margin-bottom: 4px; }
+  .btn.small { padding: 3px 8px; font-size: 12px; }
+
   @media (max-width: 820px) {
     html, body { height: auto; }
     .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 58vh auto; height: auto; }
@@ -130,6 +138,26 @@
       <h2 id="h-fx">Effect</h2>
       <select id="fxSelect" aria-labelledby="h-fx"></select>
       <p class="fxdesc" id="fxDesc"></p>
+      <details class="loader" id="loader">
+        <summary>Load effects from your PC</summary>
+        <div class="loader-body">
+          <p class="note">Preview the effects you already have in SignalRGB. Files are read in your browser only; nothing is uploaded.</p>
+          <div class="filebox">
+            <label class="file">Choose a folder<input type="file" id="fxFolder" webkitdirectory multiple></label>
+            <label class="file">Choose files<input type="file" id="fxFiles" accept=".html,.htm,text/html" multiple></label>
+          </div>
+          <p class="note">SignalRGB keeps effects in these folders. Paste a path into the file dialog's address bar:</p>
+          <div class="paths">
+            <code id="pathLibrary">%LOCALAPPDATA%\WhirlwindFX\SignalRgb\cache\effects</code>
+            <button type="button" class="btn small" data-copy="pathLibrary">Copy</button>
+            <span class="note">Library effects you've installed</span>
+            <code id="pathOwn">%USERPROFILE%\Documents\WhirlwindFX\Effects</code>
+            <button type="button" class="btn small" data-copy="pathOwn">Copy</button>
+            <span class="note">Your own effects</span>
+          </div>
+          <p class="note" id="loadNote" aria-live="polite"></p>
+        </div>
+      </details>
     </section>
 
     <section aria-labelledby="h-audio">
@@ -229,8 +257,22 @@
   const engineAudio = {};
   Object.defineProperty(engineAudio, 'freq', { get: () => AUDIO.bytes.buffer });
   Object.defineProperty(engineAudio, 'level', { get: () => AUDIO.level });
-  Object.defineProperty(engineAudio, 'density', { get: () => 0.5 });
-  window.__srgbEngine = { audio: engineAudio };
+  // Density: how noisy versus tonal the sound is (0..1). Approximated from how
+  // evenly the energy spreads across the spectrum.
+  Object.defineProperty(engineAudio, 'density', { get: () => {
+    let sum = 0, peak = 0;
+    for (let i = 0; i < 200; i++) { sum += AUDIO.bytes[i]; if (AUDIO.bytes[i] > peak) peak = AUDIO.bytes[i]; }
+    return peak ? Math.min(1, sum / 200 / peak * 2) : 0;
+  } });
+  // Library effects sometimes read screen capture (zone), game integrations
+  // (vision) or hardware sensors. The simulator has none of these, so they get
+  // neutral values: such effects load but stay mostly static.
+  window.__srgbEngine = {
+    audio: engineAudio,
+    zone: { hue: 0, saturation: 0, lightness: 0, imagedata: new ImageData(320, 200) }, // a black "screen"
+    vision: new Proxy({}, { get: () => false }),
+    getSensorValue: () => 0,
+  };
 
   const rnd = Math.random;
   function demoPsy(t) {
@@ -371,7 +413,7 @@
     return [...doc.querySelectorAll('meta[property]')].map(m => ({
       key: m.getAttribute('property'),
       label: m.getAttribute('label') || m.getAttribute('property'),
-      type: (m.getAttribute('type') || 'number').toLowerCase(),
+      type: ((t) => (t === 'combobox' ? 'list' : t))((m.getAttribute('type') || 'number').toLowerCase()),
       min: Number(m.getAttribute('min') ?? 0),
       max: Number(m.getAttribute('max') ?? 100),
       def: m.getAttribute('default'),
@@ -385,8 +427,18 @@
     return String(raw);
   }
 
+  // Set a setting the way SignalRGB does: update the global, then call the
+  // effect's on<setting>Changed() hook if it has one (many effects only work
+  // out derived values, such as colours, inside that hook).
   function applyProp(key, value) {
-    try { frame.contentWindow[key] = value; } catch (e) { /* frame not ready */ }
+    try {
+      const w = frame.contentWindow;
+      w[key] = value;
+      const hook = w['on' + key + 'Changed'];
+      if (typeof hook === 'function') hook();
+    } catch (e) {
+      if (window.__fxError) window.__fxError(e.message);
+    }
   }
 
   function buildSettings() {
@@ -412,7 +464,7 @@
       const lab = document.createElement('label');
       lab.htmlFor = id; lab.textContent = p.label;
       wrap.append(lab);
-      if (p.type === 'list') {
+      if (p.type === 'list' && p.values.length) {
         const out = document.createElement('output');
         const sel = document.createElement('select');
         sel.id = id;
@@ -457,13 +509,32 @@
     }
     currentProps = parseProps(src);
     buildSettings();
-    // Hand the effect the simulated engine before its own script runs.
-    const inject = '<script>window.engine = window.parent.__srgbEngine;<\/script>' +
+    // Hand the effect the simulated engine and its settings before its own
+    // script runs, as SignalRGB does (effects without fallbacks read them on
+    // their first frame).
+    window.__fxProps = savedProps[fx.id];
+    const inject = '<script>window.engine = window.parent.__srgbEngine; Object.assign(window, window.parent.__fxProps || {});' +
+      'window.addEventListener("error", function (e) { window.parent.__fxError && window.parent.__fxError(e.message); });<\/script>' +
       '<style>html,body{margin:0!important;overflow:hidden!important;background:#000}<\/style>';
-    frame.srcdoc = src.includes('<head>') ? src.replace('<head>', '<head>' + inject) : inject + src;
+    const head = src.match(/<head[^>]*>/i);
+    frame.srcdoc = head ? src.replace(head[0], head[0] + inject) : inject + src;
   }
 
+  // Script errors inside the effect, reported by the injected listener.
+  window.__fxError = msg => {
+    $('fxError').textContent = 'This effect hit a script error in the simulator: ' + msg;
+    $('fxError').hidden = false;
+  };
+
+  // Once the effect has loaded: call onEngineReady(), which some effects wait
+  // for before they grab the canvas and start drawing, then its setting hooks.
   frame.addEventListener('load', () => {
+    try {
+      const ready = frame.contentWindow.onEngineReady;
+      if (typeof ready === 'function') ready();
+    } catch (e) {
+      if (window.__fxError) window.__fxError(e.message);
+    }
     const store = savedProps[currentFx?.id] || {};
     for (const k in store) applyProp(k, store[k]);
   });
@@ -987,12 +1058,69 @@
   // Start
   // ===========================================================================
   const select = $('fxSelect');
-  EFFECTS.forEach(fx => { const o = document.createElement('option'); o.value = fx.id; o.textContent = fx.name; select.append(o); });
+  const localFx = [];
+
+  function renderSelect() {
+    const keep = select.value;
+    select.textContent = '';
+    const group = (label, list) => {
+      const g = document.createElement('optgroup');
+      g.label = label;
+      list.forEach(fx => { const o = document.createElement('option'); o.value = fx.id; o.textContent = fx.name; g.append(o); });
+      select.append(g);
+    };
+    group('Featured', EFFECTS);
+    if (localFx.length) group('From your PC (' + localFx.length + ')', localFx);
+    if (keep) select.value = keep;
+  }
+
+  const allFx = () => EFFECTS.concat(localFx);
   select.addEventListener('change', () => {
-    const fx = EFFECTS.find(f => f.id === select.value);
-    if (AUDIO.mode !== 'file') setAudioMode(fx.audio);
+    const fx = allFx().find(f => f.id === select.value);
+    if (AUDIO.mode !== 'file' && fx.audio) setAudioMode(fx.audio);
     loadEffect(fx);
   });
+
+  // Effects from the viewer's own SignalRGB folders, read locally.
+  async function addLocalFiles(fileList) {
+    const files = [...fileList].filter(f => /\.html?$/i.test(f.name));
+    if (!files.length) { $('loadNote').textContent = 'No effect files (.html) found there.'; return; }
+    let added = 0, limited = 0;
+    for (const file of files) {
+      const src = await file.text();
+      if (!/<canvas/i.test(src)) continue; // not a lightscript
+      const title = ((src.match(/<title>([^<]*)<\/title>/i) || [])[1] || file.name.replace(/\.html?$/i, '')).trim();
+      if (allFx().some(f => f.name === title)) continue;
+      const needsMore = /engine\s*\.\s*(zone|vision|getSensorValue)|imagedata/i.test(src);
+      const desc = ((src.match(/<meta[^>]*description="([^"]*)"/i) || [])[1] || '').trim();
+      const id = 'local-' + localFx.length;
+      srcCache[id] = src;
+      localFx.push({
+        id, name: title, audio: null,
+        desc: (desc || 'Loaded from your PC.') + (needsMore ? ' Uses screen capture, game data or sensors, which the simulator cannot provide, so it may look static here.' : ''),
+      });
+      added++;
+      if (needsMore) limited++;
+    }
+    localFx.sort((a, b) => a.name.localeCompare(b.name));
+    renderSelect();
+    $('loadNote').textContent = added
+      ? 'Added ' + added + ' effect' + (added === 1 ? '' : 's') + ' under "From your PC" in the list above' + (limited ? ' (' + limited + ' need screen capture, game data or sensors and may look static).' : '.')
+      : 'Those effects are already in the list.';
+    if (added) {
+      select.value = localFx[0].id;
+      select.dispatchEvent(new Event('change'));
+    }
+  }
+  $('fxFolder').addEventListener('change', e => addLocalFiles(e.target.files));
+  $('fxFiles').addEventListener('change', e => addLocalFiles(e.target.files));
+  document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+    const text = $(b.dataset.copy).textContent;
+    try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; }
+    catch (e) { const r = document.createRange(); r.selectNodeContents($(b.dataset.copy)); getSelection().removeAllRanges(); getSelection().addRange(r); b.textContent = 'Selected'; }
+    setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+  }));
+  renderSelect();
   select.value = 'ambient';
   loadEffect(EFFECTS[0]);
   resize();
