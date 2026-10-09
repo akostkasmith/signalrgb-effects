@@ -166,7 +166,15 @@
         <button type="button" data-audio="psy" aria-pressed="true">Psytrance demo<small>145 BPM, breakdowns</small></button>
         <button type="button" data-audio="pop" aria-pressed="false">Pop demo<small>118 BPM, with pauses</small></button>
         <button type="button" data-audio="silence" aria-pressed="false">Silence<small>no music</small></button>
-        <button type="button" data-audio="file" aria-pressed="false">Your music<small>MP3 or other file</small></button>
+        <button type="button" data-audio="file" aria-pressed="false">Music file<small>MP3 or other file</small></button>
+        <button type="button" data-audio="system" aria-pressed="false">Computer audio<small>whatever your PC plays</small></button>
+        <button type="button" data-audio="input" aria-pressed="false">Mic or input<small>line-in, Stereo Mix</small></button>
+      </div>
+      <div class="filebox" id="liveBox" hidden>
+        <button type="button" class="btn primary" id="liveStart">Share computer audio</button>
+        <select id="inputSelect" aria-label="Input device" hidden></select>
+        <button type="button" class="btn" id="liveStop" hidden>Stop</button>
+        <p class="note" id="liveNote"></p>
       </div>
       <div class="filebox" id="fileBox" hidden>
         <label class="file">Choose audio file<input type="file" id="fileInput" accept="audio/*"></label>
@@ -379,8 +387,14 @@
       AUDIO.level = -Infinity;
       return FILE.buffer ? 'paused' : 'no file yet';
     }
-    FILE.analyser.getFloatFrequencyData(freqDb);
-    FILE.analyser.getFloatTimeDomainData(timeDomain);
+    analyserFrame(FILE.analyser);
+    return 'playing';
+  }
+
+  // Converts an analyser's spectrum into SignalRGB-like bytes and level.
+  function analyserFrame(analyser) {
+    analyser.getFloatFrequencyData(freqDb);
+    analyser.getFloatTimeDomainData(timeDomain);
     const f = AUDIO.bytes;
     for (let i = 0; i < 200; i++) {
       const mag = isFinite(freqDb[i]) ? Math.pow(10, freqDb[i] / 20) : 0;
@@ -390,13 +404,28 @@
     for (let i = 0; i < timeDomain.length; i++) sum += timeDomain[i] * timeDomain[i];
     const rms = Math.sqrt(sum / timeDomain.length);
     AUDIO.level = rms > 0 ? Math.min(0, 20 * Math.log10(rms) + 10) : -Infinity;
-    return 'playing';
+  }
+
+  // Live audio: the computer's own output (shared through the browser's
+  // screen-share dialog, like SignalRGB's loopback capture) or an input
+  // device. It is analysed only, never played back, so there is no echo.
+  const LIVE = { kind: null, stream: null, source: null, analyser: null };
+
+  function liveFrame() {
+    if (!LIVE.stream || !LIVE.analyser) {
+      AUDIO.bytes.fill(0);
+      AUDIO.level = -Infinity;
+      return 'not connected';
+    }
+    analyserFrame(LIVE.analyser);
+    return 'listening';
   }
 
   function updateAudio(t) {
     if (AUDIO.mode === 'psy') AUDIO.status = demoPsy(t);
     else if (AUDIO.mode === 'pop') AUDIO.status = demoPop(t);
     else if (AUDIO.mode === 'file') AUDIO.status = fileFrame();
+    else if (AUDIO.mode === 'system' || AUDIO.mode === 'input') AUDIO.status = liveFrame();
     else { AUDIO.bytes.fill(0); AUDIO.level = -Infinity; AUDIO.status = 'silent'; }
   }
 
@@ -897,12 +926,109 @@
   // Audio source UI
   // ===========================================================================
   function setAudioMode(mode) {
+    const live = mode === 'system' || mode === 'input';
+    if (mode !== LIVE.kind) stopLive();
     AUDIO.mode = mode;
     document.querySelectorAll('[data-audio]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.audio === mode)));
     $('fileBox').hidden = mode !== 'file';
-    $('demoNote').hidden = mode === 'file';
+    $('liveBox').hidden = !live;
+    $('demoNote').hidden = mode === 'file' || live;
     if (mode !== 'file') filePause();
+    if (live) {
+      $('liveStart').textContent = mode === 'system' ? 'Share computer audio' : 'Use microphone or input';
+      $('liveNote').textContent = mode === 'system'
+        ? 'In the dialog, choose Entire screen and switch on "Share system audio" (Chrome or Edge on Windows). Only the sound is used.'
+        : 'Choose a microphone, line-in, or a "Stereo Mix" or virtual-cable device that carries your PC\'s sound.';
+    }
   }
+
+  function stopLive(note) {
+    if (LIVE.stream) LIVE.stream.getTracks().forEach(t => t.stop());
+    if (LIVE.source) { try { LIVE.source.disconnect(); } catch (e) { /* already disconnected */ } }
+    LIVE.kind = null; LIVE.stream = null; LIVE.source = null;
+    $('liveStart').hidden = false;
+    $('liveStop').hidden = true;
+    $('inputSelect').hidden = true;
+    if (note) $('liveNote').textContent = note;
+  }
+
+  function attachLive(kind, stream, label) {
+    ensureAudioCtx();
+    FILE.ctx.resume();
+    if (!LIVE.analyser) {
+      LIVE.analyser = FILE.ctx.createAnalyser();
+      LIVE.analyser.fftSize = 512;
+      LIVE.analyser.smoothingTimeConstant = 0.55;
+    }
+    LIVE.kind = kind;
+    LIVE.stream = stream;
+    LIVE.source = FILE.ctx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
+    LIVE.source.connect(LIVE.analyser); // analysed only, never sent to the speakers
+    stream.getAudioTracks().forEach(t => t.addEventListener('ended', () => {
+      if (LIVE.stream === stream) stopLive('Audio sharing stopped. Press the button to share again.');
+    }));
+    $('liveStart').hidden = true;
+    $('liveStop').hidden = false;
+    $('liveNote').textContent = 'Listening to ' + label + '. Play something and the effect will react.';
+  }
+
+  async function startSystemAudio() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      $('liveNote').textContent = 'This browser cannot share computer audio. Use Chrome or Edge on Windows, or pick "Mic or input".';
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true, // required by the dialog; disabled below, only the sound is used
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        systemAudio: 'include',
+        selfBrowserSurface: 'exclude',
+      });
+      stream.getVideoTracks().forEach(t => { t.enabled = false; });
+      if (!stream.getAudioTracks().length) {
+        stream.getTracks().forEach(t => t.stop());
+        $('liveNote').textContent = 'No sound was shared. Try again, choose Entire screen and switch on "Share system audio" (or pick a tab and "Share tab audio").';
+        return;
+      }
+      if (AUDIO.mode !== 'system') { stream.getTracks().forEach(t => t.stop()); return; }
+      attachLive('system', stream, 'your computer');
+    } catch (err) {
+      $('liveNote').textContent = err && err.name === 'NotAllowedError'
+        ? 'Sharing was cancelled. Press the button to try again.'
+        : 'Could not share computer audio: ' + (err && err.message ? err.message : err);
+    }
+  }
+
+  async function startInput(deviceId) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $('liveNote').textContent = 'This browser cannot use audio inputs.';
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      if (AUDIO.mode !== 'input') { stream.getTracks().forEach(t => t.stop()); return; }
+      stopLive();
+      const track = stream.getAudioTracks()[0];
+      attachLive('input', stream, track.label || 'your input');
+      // Device names are only available after permission, so fill the list now.
+      const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+      const sel = $('inputSelect');
+      sel.textContent = '';
+      devices.forEach(d => { const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || 'Input ' + (sel.length + 1); sel.append(o); });
+      sel.value = track.getSettings().deviceId || '';
+      sel.hidden = devices.length < 2;
+    } catch (err) {
+      $('liveNote').textContent = err && err.name === 'NotAllowedError'
+        ? 'Microphone access was blocked. Allow it in the address bar, then try again.'
+        : 'Could not open that input: ' + (err && err.message ? err.message : err);
+    }
+  }
+
+  $('liveStart').addEventListener('click', () => (AUDIO.mode === 'system' ? startSystemAudio() : startInput()));
+  $('liveStop').addEventListener('click', () => stopLive('Stopped. Press the button to start again.'));
+  $('inputSelect').addEventListener('change', e => startInput(e.target.value));
   document.querySelectorAll('[data-audio]').forEach(b => b.addEventListener('click', () => setAudioMode(b.dataset.audio)));
 
   $('fileInput').addEventListener('change', async e => {
@@ -960,6 +1086,7 @@
     }
     const stream = canvas.captureStream(30);
     if (AUDIO.mode === 'file' && FILE.dest) FILE.dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+    if (LIVE.stream) LIVE.stream.getAudioTracks().forEach(t => stream.addTrack(t.clone()));
     REC.chunks = [];
     REC.blob = null;
     REC.recorder = new MediaRecorder(stream, { mimeType: pickMime(), videoBitsPerSecond: 8_000_000 });
@@ -1043,8 +1170,8 @@
 
     const statusChip = $('hudAudioChip');
     const label = AUDIO.mode === 'file' ? (FILE.name ? AUDIO.status : 'choose a file') : AUDIO.status;
-    $('hudAudio').textContent = { psy: 'Psytrance demo', pop: 'Pop demo', silence: 'Silence', file: 'Your music' }[AUDIO.mode] + ' · ' + label;
-    statusChip.classList.toggle('paused', AUDIO.status === 'paused' || AUDIO.status === 'silent');
+    $('hudAudio').textContent = { psy: 'Psytrance demo', pop: 'Pop demo', silence: 'Silence', file: 'Music file', system: 'Computer audio', input: 'Input' }[AUDIO.mode] + ' · ' + label;
+    statusChip.classList.toggle('paused', AUDIO.status === 'paused' || AUDIO.status === 'silent' || AUDIO.status === 'not connected');
 
     if (REC.recorder) {
       const s = (now - REC.start) / 1000;

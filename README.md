@@ -42,7 +42,14 @@ Tuned on psytrance, but it works with any music.
 
 [`index.html`](index.html) is a 3D desk with a glass-panel PC (front, rear and cooler fan rings, RAM, GPU and case strips), a per-key keyboard, a mouse, monitor backlighting, wall and under-desk strips and eight Nanoleaf-style triangle panels.
 
-It runs effects the way SignalRGB does. Each effect loads unmodified into a 320 × 200 canvas, and every virtual LED samples its own spot on that canvas. Audio comes from built-in demo tracks or from a music file of your own, converted to the same data format SignalRGB hands effects. You can record a WebM clip of the view to share.
+It runs effects the way SignalRGB does. Each effect loads unmodified into a 320 × 200 canvas, and every virtual LED samples its own spot on that canvas. You can record a WebM clip of the view to share.
+
+Audio sources, all converted to the same data format SignalRGB hands effects:
+
+- **Psytrance and pop demos:** simulated tracks (silent), including breakdowns, drops and pauses.
+- **Music file:** an MP3 or other audio file from your computer.
+- **Computer audio:** whatever your PC is playing (Spotify, YouTube, games), like SignalRGB itself. In the share dialog, choose *Entire screen* and switch on *Share system audio*. Works in Chrome and Edge on Windows; only the sound is used.
+- **Mic or input:** a microphone, line-in, or a "Stereo Mix" or virtual-cable device.
 
 ### Preview the effects you already have
 
