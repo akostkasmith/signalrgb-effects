@@ -1,0 +1,1003 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Preview SignalRGB effects on a simulated 3D desk setup, driven by demo tracks or your own music.">
+<title>Virtual RGB Rig</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+  /* Layout: a full-height 3D desk scene with a control rail on the right, like a lighting
+     app's device view; on phones the scene sits on top and the rail stacks below. */
+  :root {
+    --bg: #09090d;
+    --panel: #111118;
+    --raised: #191923;
+    --line: #262633;
+    --fg: #e9e7f2;
+    --muted: #8f8ca6;
+    --accent: #8ef5d4;
+    --accent-ink: #062018;
+    --warn: #ffb36b;
+    --font-display: 'Chakra Petch', 'Segoe UI', system-ui, sans-serif;
+    --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.45; }
+
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 344px; height: 100%; }
+  .stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #050507; }
+  #gl { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  .hud { position: absolute; left: 16px; top: 14px; right: 16px; display: flex; flex-wrap: wrap; gap: 8px; pointer-events: none; }
+  .chip { font-family: var(--font-mono); font-size: 12px; padding: 4px 9px; border-radius: 999px; background: rgba(12, 12, 18, 0.72); border: 1px solid var(--line); color: var(--fg); backdrop-filter: blur(6px); }
+  .chip b { font-weight: 500; color: var(--accent); }
+  .chip.paused b { color: var(--warn); }
+
+  .cams { position: absolute; left: 16px; right: 16px; bottom: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cams button { font: 500 12px var(--font-display); letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 11px; border-radius: 6px; border: 1px solid var(--line); background: rgba(12, 12, 18, 0.78); color: var(--fg); cursor: pointer; }
+  .cams button:hover { border-color: var(--muted); }
+  .cams button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+  .rail { overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 18px 16px 28px; display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .brand { display: flex; flex-direction: column; gap: 2px; }
+  .brand h1 { margin: 0; font: 600 20px/1.1 var(--font-display); letter-spacing: 0.02em; }
+  .brand p { margin: 0; color: var(--muted); font-size: 13px; }
+
+  section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  h2 { margin: 0; font: 600 11px var(--font-display); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+  select, input[type="text"] { width: 100%; font: 14px var(--font-body); color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  select:focus-visible, input:focus-visible, button:focus-visible, label.file:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .fxdesc { margin: 0; color: var(--muted); font-size: 13px; }
+
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg button { font: 500 13px var(--font-body); text-align: left; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); color: var(--fg); cursor: pointer; }
+  .seg button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .seg small { display: block; color: var(--muted); font-size: 11px; }
+
+  .filebox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  label.file { font: 500 13px var(--font-body); padding: 7px 11px; border-radius: 6px; border: 1px dashed var(--muted); cursor: pointer; }
+  label.file input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .btn { font: 500 13px var(--font-body); padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); color: var(--fg); cursor: pointer; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .note { margin: 0; font-size: 12px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+
+  .meter { display: flex; flex-direction: column; gap: 4px; }
+  #meter { width: 100%; height: 38px; display: block; background: #0b0b10; border: 1px solid var(--line); border-radius: 6px; }
+  .meter .readout { font: 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .ctrl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
+  .ctrl label { font-size: 13px; min-width: 0; }
+  .ctrl output { font: 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ctrl input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .ctrl select { grid-column: 1 / -1; }
+  .toggle { display: flex; gap: 10px; align-items: center; font-size: 13px; cursor: pointer; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+  #fxSettings { display: flex; flex-direction: column; gap: 12px; }
+
+  .canvasbox { position: relative; width: 100%; aspect-ratio: 16 / 10; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #000; }
+  .canvasbox iframe { position: absolute; left: 0; top: 0; width: 320px; height: 200px; border: 0; transform-origin: 0 0; }
+  .canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  .rec { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .rec .time { font: 13px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rec .dot { width: 9px; height: 9px; border-radius: 50%; background: #ff4d5e; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.2; } }
+  @media (prefers-reduced-motion: reduce) { .rec .dot { animation: none; } }
+
+  .error { color: var(--warn); }
+
+  @media (max-width: 820px) {
+    html, body { height: auto; }
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 58vh auto; height: auto; }
+    .rail { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="stage" id="stage">
+    <canvas id="gl" aria-label="3D view of a desk setup with RGB lighting driven by the selected effect"></canvas>
+    <div class="hud" aria-live="polite">
+      <span class="chip">Effect <b id="hudFx">…</b></span>
+      <span class="chip" id="hudAudioChip">Audio <b id="hudAudio">…</b></span>
+      <span class="chip"><b id="hudLeds">0</b> LEDs</span>
+    </div>
+    <div class="cams" role="group" aria-label="Camera">
+      <button type="button" data-cam="overview" aria-pressed="true">Overview</button>
+      <button type="button" data-cam="pc" aria-pressed="false">PC</button>
+      <button type="button" data-cam="keyboard" aria-pressed="false">Keyboard</button>
+      <button type="button" data-cam="wall" aria-pressed="false">Wall</button>
+      <button type="button" id="spinBtn" aria-pressed="false">Slow orbit</button>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <div class="brand">
+      <h1>Virtual RGB Rig</h1>
+      <p>SignalRGB effects on a simulated desk setup. Drag to look around.</p>
+    </div>
+
+    <section aria-labelledby="h-fx">
+      <h2 id="h-fx">Effect</h2>
+      <select id="fxSelect" aria-labelledby="h-fx"></select>
+      <p class="fxdesc" id="fxDesc"></p>
+    </section>
+
+    <section aria-labelledby="h-audio">
+      <h2 id="h-audio">Audio</h2>
+      <div class="seg" role="group" aria-labelledby="h-audio">
+        <button type="button" data-audio="psy" aria-pressed="true">Psytrance demo<small>145 BPM, breakdowns</small></button>
+        <button type="button" data-audio="pop" aria-pressed="false">Pop demo<small>118 BPM, with pauses</small></button>
+        <button type="button" data-audio="silence" aria-pressed="false">Silence<small>no music</small></button>
+        <button type="button" data-audio="file" aria-pressed="false">Your music<small>MP3 or other file</small></button>
+      </div>
+      <div class="filebox" id="fileBox" hidden>
+        <label class="file">Choose audio file<input type="file" id="fileInput" accept="audio/*"></label>
+        <button type="button" class="btn" id="playBtn" disabled>Play</button>
+        <p class="note" id="fileNote">The file stays in your browser; nothing is uploaded.</p>
+      </div>
+      <p class="note" id="demoNote">Demo tracks are simulated data shaped like SignalRGB's audio feed, so they make no sound.</p>
+      <div class="meter">
+        <canvas id="meter" width="560" height="76" aria-label="Spectrum the effect receives"></canvas>
+        <span class="readout" id="meterReadout">level –</span>
+      </div>
+    </section>
+
+    <section aria-labelledby="h-settings">
+      <h2 id="h-settings">Effect settings</h2>
+      <div id="fxSettings"></div>
+    </section>
+
+    <section aria-labelledby="h-canvas">
+      <h2 id="h-canvas">Effect canvas · 320 × 200</h2>
+      <div class="canvasbox" id="canvasBox">
+        <iframe id="fxFrame" title="Effect canvas" tabindex="-1"></iframe>
+        <canvas id="layoutOverlay" width="640" height="400"></canvas>
+      </div>
+      <label class="toggle"><input type="checkbox" id="showLayout" checked> Show where each device samples the canvas</label>
+      <p class="note error" id="fxError" hidden></p>
+    </section>
+
+    <section aria-labelledby="h-scene">
+      <h2 id="h-scene">Scene</h2>
+      <div class="ctrl">
+        <label for="bloom">Glow</label><output id="bloomOut" for="bloom">1.0</output>
+        <input type="range" id="bloom" min="0" max="2.5" step="0.1" value="1.1">
+      </div>
+      <div class="ctrl">
+        <label for="roomLight">Room light</label><output id="roomOut" for="roomLight">35%</output>
+        <input type="range" id="roomLight" min="0" max="100" step="1" value="35">
+      </div>
+      <div class="ctrl">
+        <label for="ledGain">LED intensity</label><output id="ledOut" for="ledGain">100%</output>
+        <input type="range" id="ledGain" min="20" max="160" step="5" value="100">
+      </div>
+      <label class="toggle"><input type="checkbox" id="showNano" checked> Nanoleaf panels on the wall</label>
+    </section>
+
+    <section aria-labelledby="h-rec">
+      <h2 id="h-rec">Record a clip</h2>
+      <div class="rec">
+        <button type="button" class="btn primary" id="recBtn">Start recording</button>
+        <span class="dot" id="recDot" hidden></span>
+        <span class="time" id="recTime"></span>
+        <button type="button" class="btn" id="saveBtn" hidden>Save clip</button>
+      </div>
+      <p class="note" id="recNote">Records the 3D view as a WebM video (up to 60 seconds), with sound when you play your own music.</p>
+    </section>
+  </aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+
+  // ===========================================================================
+  // Effects. Each runs unmodified in a 320x200 frame, exactly like SignalRGB:
+  // the page hands it an `engine.audio` object and sets its settings as globals.
+  // To add an effect, drop its .html into effects/ and list it here.
+  // ===========================================================================
+  const EFFECTS = [
+    { id: 'ambient', name: 'Psy Ambient Drift', file: 'effects/PsyAmbientDrift.html', audio: 'psy',
+      desc: 'Calm blacklight glow for working or watching TV. Each colour follows its own part of the mix; the mood cools in breakdowns and warms on drops.' },
+  ];
+
+  // ===========================================================================
+  // Audio, in the shape SignalRGB actually delivers (measured on a real install):
+  // freq = ArrayBuffer of 200 unsigned bytes, small values (average ~5, bass ~40),
+  // all 0 in silence; level = about -8..0 dB with music, -Infinity in silence.
+  // ===========================================================================
+  const AUDIO = { bytes: new Uint8Array(200), level: -Infinity, mode: 'psy', status: '' };
+  const engineAudio = {};
+  Object.defineProperty(engineAudio, 'freq', { get: () => AUDIO.bytes.buffer });
+  Object.defineProperty(engineAudio, 'level', { get: () => AUDIO.level });
+  Object.defineProperty(engineAudio, 'density', { get: () => 0.5 });
+  window.__srgbEngine = { audio: engineAudio };
+
+  const rnd = Math.random;
+  function demoPsy(t) {
+    const beatLen = 60 / 145, bp = t / beatLen, beat = Math.floor(bp), ph = bp - beat;
+    const inLoop = beat % 64;
+    const section = inLoop < 32 ? 'groove' : inLoop < 48 ? 'breakdown' : 'build-up';
+    const six = Math.floor(ph * 4), sph = ph * 4 - six;
+    let kick = 0, bass = 0, hat = 0, acid = 0, pad = 0, riser = 0, snare = 0;
+    if (section === 'groove') {
+      kick = Math.exp(-ph * 14);
+      if (six > 0) bass = Math.exp(-sph * 6);
+      hat = six === 2 ? Math.exp(-sph * 10) : 0.2 * Math.exp(-sph * 20);
+      acid = 0.5 + 0.5 * Math.sin(t * 0.7);
+    } else if (section === 'breakdown') {
+      pad = 0.6 + 0.2 * Math.sin(t * 0.5);
+      hat = six === 2 && beat % 2 === 0 ? 0.4 * Math.exp(-sph * 8) : 0;
+    } else {
+      const prog = (inLoop + ph - 48) / 16, div = prog < 0.5 ? 1 : prog < 0.75 ? 2 : 4;
+      pad = 0.4; riser = prog;
+      snare = Math.exp(-((ph * div) % 1) * 8) * (0.4 + 0.6 * prog);
+    }
+    const f = AUDIO.bytes, acidC = 25 + acid * 55;
+    for (let i = 0; i < 200; i++) {
+      let v = rnd() * 1.5;
+      if (i < 6) v += kick * 110 * (1 - i / 12);
+      if (i >= 3 && i < 16) v += bass * 55 * Math.exp(-Math.abs(i - 8) / 5);
+      if (i >= 16 && i < 90) {
+        if (acid) v += 30 * Math.exp(-Math.abs(i - acidC) / 6);
+        v += pad * 16 * Math.exp(-Math.abs(i - 40) / 25) + snare * 18;
+      }
+      if (i >= 90) v += hat * 14 + riser * 10 * rnd() + snare * 10;
+      f[i] = Math.min(255, v) | 0;
+    }
+    AUDIO.level = -6.5 + 5.5 * Math.min(1, 0.35 + kick * 0.5 + pad * 0.3 + riser * 0.4);
+    return section;
+  }
+
+  function demoPop(t) {
+    const lt = t % 16;
+    if (lt >= 12) { AUDIO.bytes.fill(0); AUDIO.level = -Infinity; return 'paused'; }
+    const beatLen = 60 / 118, bp = t / beatLen, beat = Math.floor(bp), ph = bp - beat;
+    const kick = Math.exp(-ph * 10);
+    const snare = beat % 2 === 1 ? Math.exp(-ph * 8) : 0;
+    const hat = Math.exp(-((ph * 2) % 1) * 14);
+    const chord = 0.6 + 0.4 * Math.sin(t * 0.8);
+    const f = AUDIO.bytes;
+    for (let i = 0; i < 200; i++) {
+      let v = rnd() * 1.5;
+      if (i < 6) v += kick * 100 * (1 - i / 12);
+      if (i >= 4 && i < 14) v += 25 * chord * Math.exp(-Math.abs(i - 8) / 4);
+      if (i >= 14 && i < 70) v += chord * 16 * Math.exp(-Math.abs(i - 30) / 18) + snare * 30;
+      if (i >= 70) v += hat * 10 + snare * 14;
+      f[i] = Math.min(255, v) | 0;
+    }
+    AUDIO.level = -6 + 5 * kick;
+    return 'playing';
+  }
+
+  // Your own music: WebAudio analysis converted to SignalRGB-like bytes.
+  const FILE = { ctx: null, analyser: null, gain: null, dest: null, buffer: null, src: null, playing: false, offset: 0, startedAt: 0, name: '' };
+  let freqDb = null, timeDomain = null;
+
+  function ensureAudioCtx() {
+    if (FILE.ctx) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    FILE.ctx = new Ctx();
+    FILE.analyser = FILE.ctx.createAnalyser();
+    FILE.analyser.fftSize = 512;
+    FILE.analyser.smoothingTimeConstant = 0.55;
+    FILE.gain = FILE.ctx.createGain();
+    FILE.gain.connect(FILE.analyser);
+    FILE.analyser.connect(FILE.ctx.destination);
+    try { FILE.dest = FILE.ctx.createMediaStreamDestination(); FILE.gain.connect(FILE.dest); } catch (e) { FILE.dest = null; }
+    freqDb = new Float32Array(FILE.analyser.frequencyBinCount);
+    timeDomain = new Float32Array(FILE.analyser.fftSize);
+  }
+
+  function filePlay() {
+    if (!FILE.buffer) return;
+    FILE.ctx.resume();
+    const src = FILE.ctx.createBufferSource();
+    src.buffer = FILE.buffer;
+    src.loop = true;
+    src.connect(FILE.gain);
+    src.start(0, FILE.offset % FILE.buffer.duration);
+    FILE.src = src;
+    FILE.startedAt = FILE.ctx.currentTime;
+    FILE.playing = true;
+    $('playBtn').textContent = 'Pause';
+  }
+
+  function filePause() {
+    if (!FILE.playing) return;
+    FILE.offset += FILE.ctx.currentTime - FILE.startedAt;
+    try { FILE.src.stop(); } catch (e) { /* already stopped */ }
+    FILE.src = null;
+    FILE.playing = false;
+    $('playBtn').textContent = 'Play';
+  }
+
+  function fileFrame() {
+    if (!FILE.playing || !FILE.analyser) {
+      AUDIO.bytes.fill(0);
+      AUDIO.level = -Infinity;
+      return FILE.buffer ? 'paused' : 'no file yet';
+    }
+    FILE.analyser.getFloatFrequencyData(freqDb);
+    FILE.analyser.getFloatTimeDomainData(timeDomain);
+    const f = AUDIO.bytes;
+    for (let i = 0; i < 200; i++) {
+      const mag = isFinite(freqDb[i]) ? Math.pow(10, freqDb[i] / 20) : 0;
+      f[i] = Math.min(255, mag * 1100) | 0;
+    }
+    let sum = 0;
+    for (let i = 0; i < timeDomain.length; i++) sum += timeDomain[i] * timeDomain[i];
+    const rms = Math.sqrt(sum / timeDomain.length);
+    AUDIO.level = rms > 0 ? Math.min(0, 20 * Math.log10(rms) + 10) : -Infinity;
+    return 'playing';
+  }
+
+  function updateAudio(t) {
+    if (AUDIO.mode === 'psy') AUDIO.status = demoPsy(t);
+    else if (AUDIO.mode === 'pop') AUDIO.status = demoPop(t);
+    else if (AUDIO.mode === 'file') AUDIO.status = fileFrame();
+    else { AUDIO.bytes.fill(0); AUDIO.level = -Infinity; AUDIO.status = 'silent'; }
+  }
+
+  // ===========================================================================
+  // Effect loading and settings
+  // ===========================================================================
+  const frame = $('fxFrame');
+  const srcCache = {};
+  const savedProps = {};
+  let currentFx = null, currentProps = [];
+
+  function parseProps(src) {
+    const doc = new DOMParser().parseFromString(src, 'text/html');
+    return [...doc.querySelectorAll('meta[property]')].map(m => ({
+      key: m.getAttribute('property'),
+      label: m.getAttribute('label') || m.getAttribute('property'),
+      type: (m.getAttribute('type') || 'number').toLowerCase(),
+      min: Number(m.getAttribute('min') ?? 0),
+      max: Number(m.getAttribute('max') ?? 100),
+      def: m.getAttribute('default'),
+      values: (m.getAttribute('values') || '').split(',').map(s => s.trim()).filter(Boolean),
+    })).filter(p => p.label && p.type !== 'audio_level');
+  }
+
+  function toValue(p, raw) {
+    if (p.type === 'number' || p.type === 'hue') return Number(raw);
+    if (p.type === 'boolean') return raw === true || raw === 'true' || raw === '1' || raw === 1;
+    return String(raw);
+  }
+
+  function applyProp(key, value) {
+    try { frame.contentWindow[key] = value; } catch (e) { /* frame not ready */ }
+  }
+
+  function buildSettings() {
+    const box = $('fxSettings');
+    box.textContent = '';
+    const store = savedProps[currentFx.id] ||= {};
+    currentProps.forEach((p, idx) => {
+      if (!(p.key in store)) store[p.key] = toValue(p, p.def);
+      const id = 'fxp-' + currentFx.id + '-' + idx;
+      const wrap = document.createElement('div');
+      if (p.type === 'boolean') {
+        wrap.className = 'toggle';
+        const lab = document.createElement('label');
+        lab.className = 'toggle';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.id = id; cb.checked = !!store[p.key];
+        cb.addEventListener('change', () => { store[p.key] = cb.checked; applyProp(p.key, cb.checked); });
+        lab.append(cb, document.createTextNode(p.label));
+        box.append(lab);
+        return;
+      }
+      wrap.className = 'ctrl';
+      const lab = document.createElement('label');
+      lab.htmlFor = id; lab.textContent = p.label;
+      wrap.append(lab);
+      if (p.type === 'list') {
+        const out = document.createElement('output');
+        const sel = document.createElement('select');
+        sel.id = id;
+        p.values.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.append(o); });
+        sel.value = store[p.key];
+        sel.addEventListener('change', () => { store[p.key] = sel.value; applyProp(p.key, sel.value); });
+        wrap.append(out, sel);
+      } else if (p.type === 'color') {
+        const inp = document.createElement('input');
+        inp.type = 'color'; inp.id = id; inp.value = store[p.key];
+        inp.addEventListener('input', () => { store[p.key] = inp.value; applyProp(p.key, inp.value); });
+        wrap.append(inp);
+      } else if (p.type === 'textfield') {
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.id = id; inp.value = store[p.key];
+        inp.addEventListener('input', () => { store[p.key] = inp.value; applyProp(p.key, inp.value); });
+        wrap.append(document.createElement('span'), inp);
+      } else {
+        const out = document.createElement('output');
+        out.htmlFor = id; out.textContent = store[p.key];
+        const inp = document.createElement('input');
+        inp.type = 'range'; inp.id = id; inp.min = p.min; inp.max = p.max; inp.step = 1; inp.value = store[p.key];
+        inp.addEventListener('input', () => { const v = Number(inp.value); store[p.key] = v; out.textContent = v; applyProp(p.key, v); });
+        wrap.append(out, inp);
+      }
+      box.append(wrap);
+    });
+  }
+
+  async function loadEffect(fx) {
+    currentFx = fx;
+    $('hudFx').textContent = fx.name;
+    $('fxDesc').textContent = fx.desc;
+    $('fxError').hidden = true;
+    let src;
+    try {
+      src = srcCache[fx.id] ||= await (await fetch(fx.file)).text();
+    } catch (e) {
+      $('fxError').textContent = 'Could not load ' + fx.name + ': ' + e.message;
+      $('fxError').hidden = false;
+      return;
+    }
+    currentProps = parseProps(src);
+    buildSettings();
+    // Hand the effect the simulated engine before its own script runs.
+    const inject = '<script>window.engine = window.parent.__srgbEngine;<\/script>' +
+      '<style>html,body{margin:0!important;overflow:hidden!important;background:#000}<\/style>';
+    frame.srcdoc = src.includes('<head>') ? src.replace('<head>', '<head>' + inject) : inject + src;
+  }
+
+  frame.addEventListener('load', () => {
+    const store = savedProps[currentFx?.id] || {};
+    for (const k in store) applyProp(k, store[k]);
+  });
+
+  // ===========================================================================
+  // 3D scene
+  // ===========================================================================
+  const canvas = $('gl');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setClearColor(0x050507);
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x050507, 3.2, 6.5);
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.02, 20);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 0.35;
+  controls.maxDistance = 4;
+  controls.maxPolarAngle = Math.PI * 0.53;
+
+  const composer = new THREE.EffectComposer(renderer);
+  composer.addPass(new THREE.RenderPass(scene, camera));
+  const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(512, 512), 1.1, 0.55, 0.18);
+  composer.addPass(bloomPass);
+
+  const ambient = new THREE.AmbientLight(0x9aa0c8, 0.35);
+  const hemi = new THREE.HemisphereLight(0x8890b8, 0x141018, 0.35);
+  scene.add(ambient, hemi);
+
+  const mat = (color, rough = 0.7, metal = 0) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
+  const box = (w, h, d, material, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+    m.position.set(x, y, z);
+    scene.add(m);
+    return m;
+  };
+
+  // Room and desk
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), mat(0x16141a, 0.95));
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(8, 4), mat(0x1c1b24, 0.95));
+  wall.position.set(0, 2, -0.76);
+  scene.add(wall);
+  const deskMat = mat(0x2b2420, 0.55);
+  box(2.0, 0.04, 0.86, deskMat, 0, 0.73, -0.03);
+  const legMat = mat(0x15151a, 0.5, 0.4);
+  [[-0.95, -0.4], [0.95, -0.4], [-0.95, 0.34], [0.95, 0.34]].forEach(([x, z]) => box(0.04, 0.71, 0.04, legMat, x, 0.355, z));
+
+  // Monitor
+  const darkMat = mat(0x111116, 0.5, 0.3);
+  box(0.66, 0.38, 0.025, darkMat, -0.2, 1.1, -0.3);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.63, 0.35), new THREE.MeshBasicMaterial({ color: 0x0a0d16 }));
+  screen.position.set(-0.2, 1.1, -0.2865);
+  scene.add(screen);
+  box(0.05, 0.22, 0.03, darkMat, -0.2, 0.86, -0.33);
+  box(0.24, 0.012, 0.16, darkMat, -0.2, 0.756, -0.31);
+
+  // PC case: x 0.565..0.795, y 0.75..1.23, z -0.28..0.18. Glass on the left and front.
+  const caseMat = mat(0x141419, 0.45, 0.6);
+  box(0.23, 0.012, 0.46, caseMat, 0.68, 1.224, -0.05);
+  box(0.23, 0.012, 0.46, caseMat, 0.68, 0.756, -0.05);
+  box(0.012, 0.48, 0.46, caseMat, 0.789, 0.99, -0.05);
+  box(0.23, 0.48, 0.012, caseMat, 0.68, 0.99, -0.274);
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x8892a8, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.12, depthWrite: false });
+  box(0.004, 0.46, 0.44, glassMat, 0.567, 0.99, -0.05);
+  box(0.22, 0.46, 0.004, glassMat, 0.68, 0.99, 0.178);
+  box(0.004, 0.36, 0.3, mat(0x0d0f0d, 0.6), 0.782, 1.03, -0.11);           // motherboard
+  box(0.12, 0.04, 0.34, mat(0x1a1a20, 0.4, 0.5), 0.72, 0.92, -0.08);       // GPU
+  const cooler = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.06, 28), mat(0x1b1b22, 0.4, 0.6));
+  cooler.rotation.z = Math.PI / 2;
+  cooler.position.set(0.75, 1.08, -0.12);
+  scene.add(cooler);
+  const fanMat = mat(0x0e0e12, 0.6);
+  const fanDisc = (x, y, z, r, rotY) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.022, 28), fanMat);
+    m.rotation.x = Math.PI / 2;
+    if (rotY) m.rotation.z = rotY;
+    m.position.set(x, y, z);
+    scene.add(m);
+  };
+  [0.86, 0.99, 1.12].forEach(y => fanDisc(0.68, y, 0.155, 0.058));
+  fanDisc(0.68, 1.12, -0.255, 0.052);
+  for (let k = 0; k < 4; k++) box(0.045, 0.13, 0.006, mat(0x15151b, 0.4, 0.5), 0.757, 1.07, -0.02 + k * 0.016); // RAM
+
+  // Keyboard and mouse
+  box(0.47, 0.018, 0.16, darkMat, -0.2, 0.759, 0.2);
+  const mouse = new THREE.Mesh(new THREE.SphereGeometry(0.03, 20, 14), darkMat);
+  mouse.scale.set(1, 0.55, 1.7);
+  mouse.position.set(0.22, 0.762, 0.21);
+  scene.add(mouse);
+
+  // ===========================================================================
+  // LEDs. Each knows its 3D position, its spot on the effect canvas (u, v in
+  // 0..1, laid out the way you'd arrange devices in SignalRGB's layout page),
+  // and the room light it feeds.
+  // ===========================================================================
+  const leds = [];
+  const add = (x, y, z, u, v, group) => leds.push({ pos: new THREE.Vector3(x, y, z), u, v, group });
+
+  // Wall strip behind the desk (stops short of the Nanoleaf panels on the left)
+  for (let i = 0; i < 34; i++) { const x = -0.34 + 1.34 * i / 33; add(x, 1.6, -0.745, (x + 1) / 2, 0.04, 'wall'); }
+  // Monitor backlight: loop around the back of the monitor, facing the wall
+  {
+    const pts = [], w = 0.6, h = 0.32, n = 40;
+    for (let i = 0; i < n; i++) {
+      const d = i / n * 2 * (w + h);
+      let lx, ly;
+      if (d < w) { lx = -w / 2 + d; ly = h / 2; }
+      else if (d < w + h) { lx = w / 2; ly = h / 2 - (d - w); }
+      else if (d < 2 * w + h) { lx = w / 2 - (d - w - h); ly = -h / 2; }
+      else { lx = -w / 2; ly = -h / 2 + (d - 2 * w - h); }
+      pts.push([lx, ly]);
+    }
+    pts.forEach(([lx, ly]) => add(-0.2 + lx, 1.1 + ly, -0.318, 0.14 + (lx / w + 0.5) * 0.42, 0.12 + (0.5 - ly / h) * 0.34, 'monitor'));
+  }
+  // Fans
+  const ring = (cx, cy, cz, r, n, cu, cv, ru, rv, plane, group) => {
+    for (let i = 0; i < n; i++) {
+      const a = i / n * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+      if (plane === 'xy') add(cx + ca * r, cy + sa * r, cz, cu + ca * ru, cv - sa * rv, group);
+      else add(cx, cy + sa * r, cz + ca * r, cu + ca * ru, cv - sa * rv, group);
+    }
+  };
+  [0.86, 0.99, 1.12].forEach((y, i) => ring(0.68, y, 0.168, 0.056, 30, 0.9, 0.62 - i * 0.2, 0.045, 0.07, 'xy', 'pc'));
+  ring(0.68, 1.12, -0.268, 0.05, 28, 0.66, 0.2, 0.04, 0.065, 'xy', 'pc');
+  ring(0.718, 1.08, -0.12, 0.042, 24, 0.76, 0.3, 0.03, 0.05, 'yz', 'pc');
+  // RAM light bars
+  for (let k = 0; k < 4; k++) for (let i = 0; i < 8; i++) add(0.733, 1.015 + i * 0.015, -0.02 + k * 0.016, 0.7 + k * 0.022, 0.31 - i * 0.022, 'pc');
+  // GPU edge strip and case floor strip
+  for (let i = 0; i < 18; i++) { const k = i / 17; add(0.658, 0.92, -0.24 + k * 0.32, 0.63 + k * 0.3, 0.5, 'pc'); }
+  for (let i = 0; i < 16; i++) { const k = i / 15; add(0.6, 0.768, -0.25 + k * 0.4, 0.62 + k * 0.33, 0.7, 'pc'); }
+  // Mouse underglow + logo
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * Math.PI * 2;
+    add(0.22 + Math.cos(a) * 0.03, 0.748, 0.21 + Math.sin(a) * 0.05, 0.69 + Math.cos(a) * 0.02, 0.84 + Math.sin(a) * 0.05, 'desk');
+  }
+  add(0.22, 0.778, 0.235, 0.69, 0.86, 'desk');
+  // Under-desk strip along the front edge
+  for (let i = 0; i < 48; i++) { const k = i / 47; add(-0.98 + 1.96 * k, 0.703, 0.37, k, 0.97, 'floor'); }
+
+  const ledGeo = new THREE.SphereGeometry(0.0085, 10, 8);
+  const ledMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const ledMesh = new THREE.InstancedMesh(ledGeo, ledMat, leds.length);
+  const dummy = new THREE.Object3D();
+  const tmpColor = new THREE.Color();
+  leds.forEach((l, i) => { dummy.position.copy(l.pos); dummy.updateMatrix(); ledMesh.setMatrixAt(i, dummy.matrix); ledMesh.setColorAt(i, tmpColor.setRGB(0, 0, 0)); });
+  scene.add(ledMesh);
+
+  // Per-key keyboard lighting: 6 rows x 18 keys
+  const keys = [];
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 18; c++) {
+    if (r === 5 && c > 3 && c < 10 && c !== 6) continue; // space bar area: one wide key
+    keys.push({ x: -0.405 + c * 0.0242, z: 0.14 + r * 0.0245, w: r === 5 && c === 6 ? 0.15 : 0.019, u: 0.18 + c / 17 * 0.42, v: 0.7 + r / 5 * 0.2 });
+  }
+  const keyMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.009, 0.019), new THREE.MeshBasicMaterial({ color: 0xffffff }), keys.length);
+  keys.forEach((k, i) => {
+    dummy.position.set(k.x + (k.w > 0.1 ? 0.035 : 0), 0.773, k.z);
+    dummy.scale.set(k.w, 1, 1);
+    dummy.updateMatrix();
+    keyMesh.setMatrixAt(i, dummy.matrix);
+    keyMesh.setColorAt(i, tmpColor.setRGB(0, 0, 0));
+  });
+  dummy.scale.set(1, 1, 1);
+  scene.add(keyMesh);
+  // Nanoleaf Shapes triangles on the wall, left of and above the monitor. Like
+  // in SignalRGB, each panel is one colour, sampled at its centre. The panel
+  // face is brighter in the middle and falls off toward the corners.
+  const NANO_SIDE = 0.2, NANO_H = NANO_SIDE * Math.sqrt(3) / 2, NANO_Z = -0.742;
+  const nanoGroup = new THREE.Group();
+  scene.add(nanoGroup);
+  const panels = [];
+  function addPanel(cx, yb, up) {
+    const s = NANO_SIDE, h = NANO_H;
+    const corners = up
+      ? [[cx - s / 2, yb], [cx + s / 2, yb], [cx, yb + h]]
+      : [[cx - s / 2, yb + h], [cx + s / 2, yb + h], [cx, yb]];
+    const cy = up ? yb + h / 3 : yb + 2 * h / 3;
+    const inset = 0.9; // gap between neighbouring panels
+    const pts = corners.map(([x, y]) => [cx + (x - cx) * inset, cy + (y - cy) * inset]);
+    // Frame: a slightly larger dark triangle just behind the face.
+    const frameGeo = new THREE.BufferGeometry();
+    frameGeo.setAttribute('position', new THREE.Float32BufferAttribute(
+      corners.flatMap(([x, y]) => [cx + (x - cx) * 0.97, cy + (y - cy) * 0.97, NANO_Z - 0.003]), 3));
+    frameGeo.computeVertexNormals();
+    nanoGroup.add(new THREE.Mesh(frameGeo, new THREE.MeshStandardMaterial({ color: 0x1d1d24, roughness: 0.6, side: THREE.DoubleSide })));
+    // Face: centre vertex plus the three corners, fanned into three triangles.
+    const pos = [cx, cy, NANO_Z], col = [1, 1, 1];
+    pts.forEach(([x, y]) => { pos.push(x, y, NANO_Z); col.push(0.55, 0.55, 0.55); });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 1]);
+    const faceMat = new THREE.MeshBasicMaterial({ color: 0x000000, vertexColors: true, side: THREE.DoubleSide });
+    nanoGroup.add(new THREE.Mesh(geo, faceMat));
+    panels.push({
+      mat: faceMat, cx, cy,
+      u: 0.02 + (cx + 1) / 0.6 * 0.2,
+      v: 0.1 + (1.72 - cy) / 0.37 * 0.3,
+    });
+  }
+  for (let i = 0; i < 5; i++) addPanel(-0.9 + i * NANO_SIDE / 2, 1.34, i % 2 === 0);
+  for (let i = 1; i < 4; i++) addPanel(-0.9 + i * NANO_SIDE / 2, 1.34 + NANO_H, i % 2 === 1);
+
+  $('hudLeds').textContent = leds.length + keys.length + panels.length;
+
+  // Light spill: each group of LEDs tints the room through a point light.
+  const groupLights = {
+    pc: new THREE.PointLight(0xffffff, 0, 1.1, 2),
+    monitor: new THREE.PointLight(0xffffff, 0, 1.6, 2),
+    wall: new THREE.PointLight(0xffffff, 0, 2.2, 2),
+    floor: new THREE.PointLight(0xffffff, 0, 1.6, 2),
+    desk: new THREE.PointLight(0xffffff, 0, 0.6, 2),
+    keyboard: new THREE.PointLight(0xffffff, 0, 0.7, 2),
+    nanoleaf: new THREE.PointLight(0xffffff, 0, 1.1, 2),
+  };
+  groupLights.nanoleaf.position.set(-0.7, 1.48, -0.6);
+  groupLights.pc.position.set(0.68, 1.0, -0.05);
+  groupLights.monitor.position.set(-0.2, 1.1, -0.6);
+  groupLights.wall.position.set(0, 1.62, -0.6);
+  groupLights.floor.position.set(0, 0.4, 0.45);
+  groupLights.desk.position.set(0.22, 0.8, 0.22);
+  groupLights.keyboard.position.set(-0.2, 0.86, 0.2);
+  const lightStrength = { pc: 2.2, monitor: 2.6, wall: 2.4, floor: 2.6, desk: 0.6, keyboard: 1.0, nanoleaf: 2.2 };
+  Object.values(groupLights).forEach(l => scene.add(l));
+
+  // ===========================================================================
+  // Sampling the effect canvas each frame
+  // ===========================================================================
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 320; sampleCanvas.height = 200;
+  const sctx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+  let pixels = null, frameReadable = true;
+
+  function grabCanvas() {
+    try {
+      const c = frame.contentDocument && frame.contentDocument.getElementById('exCanvas');
+      if (!c) return;
+      sctx.drawImage(c, 0, 0, 320, 200);
+      pixels = sctx.getImageData(0, 0, 320, 200).data;
+    } catch (e) {
+      if (frameReadable) {
+        frameReadable = false;
+        $('fxError').textContent = 'This browser blocked reading the effect canvas, so the LEDs cannot update.';
+        $('fxError').hidden = false;
+      }
+    }
+  }
+
+  const sums = {};
+  function updateLeds(gain) {
+    if (!pixels) return;
+    for (const g in groupLights) sums[g] = [0, 0, 0, 0];
+    const px = (u, v) => {
+      const x = Math.max(0, Math.min(319, Math.round(u * 319)));
+      const y = Math.max(0, Math.min(199, Math.round(v * 199)));
+      return (y * 320 + x) * 4;
+    };
+    for (let i = 0; i < leds.length; i++) {
+      const l = leds[i], o = px(l.u, l.v);
+      const r = pixels[o] / 255, g = pixels[o + 1] / 255, b = pixels[o + 2] / 255;
+      ledMesh.setColorAt(i, tmpColor.setRGB(r * gain, g * gain, b * gain));
+      const s = sums[l.group]; s[0] += r; s[1] += g; s[2] += b; s[3]++;
+    }
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i], o = px(k.u, k.v);
+      const r = pixels[o] / 255, g = pixels[o + 1] / 255, b = pixels[o + 2] / 255;
+      keyMesh.setColorAt(i, tmpColor.setRGB(r * gain * 0.7, g * gain * 0.7, b * gain * 0.7));
+      const s = sums.keyboard; s[0] += r; s[1] += g; s[2] += b; s[3]++;
+    }
+    if (nanoGroup.visible) {
+      for (const p of panels) {
+        const o = px(p.u, p.v);
+        const r = pixels[o] / 255, g = pixels[o + 1] / 255, b = pixels[o + 2] / 255;
+        p.mat.color.setRGB(r * gain * 0.85, g * gain * 0.85, b * gain * 0.85);
+        const s = sums.nanoleaf; s[0] += r; s[1] += g; s[2] += b; s[3]++;
+      }
+    }
+    ledMesh.instanceColor.needsUpdate = true;
+    keyMesh.instanceColor.needsUpdate = true;
+    for (const g in groupLights) {
+      const s = sums[g];
+      if (!s[3]) { groupLights[g].intensity = 0; continue; }
+      const r = s[0] / s[3], gg = s[1] / s[3], b = s[2] / s[3];
+      const lum = Math.max(r, gg, b);
+      const light = groupLights[g];
+      if (lum > 0.001) light.color.setRGB(r / lum, gg / lum, b / lum);
+      light.intensity = lum * lightStrength[g] * gain;
+    }
+  }
+
+  // ===========================================================================
+  // Camera presets
+  // ===========================================================================
+  const CAMS = {
+    overview: { pos: [0.4, 1.5, 2.05], target: [0.18, 1.02, -0.2] },
+    pc: { pos: [0.1, 1.2, 0.85], target: [0.64, 1.0, -0.06] },
+    keyboard: { pos: [-0.12, 1.08, 0.7], target: [-0.12, 0.77, 0.18] },
+    wall: { pos: [-0.35, 1.38, 1.0], target: [-0.35, 1.38, -0.75] },
+  };
+  let camTween = null, spin = false;
+  function goCam(name, instant) {
+    const c = CAMS[name];
+    document.querySelectorAll('[data-cam]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cam === name)));
+    const to = { pos: new THREE.Vector3(...c.pos), target: new THREE.Vector3(...c.target) };
+    if (instant) { camera.position.copy(to.pos); controls.target.copy(to.target); controls.update(); return; }
+    camTween = { from: { pos: camera.position.clone(), target: controls.target.clone() }, to, t: 0 };
+  }
+  document.querySelectorAll('[data-cam]').forEach(b => b.addEventListener('click', () => goCam(b.dataset.cam)));
+  $('spinBtn').addEventListener('click', () => {
+    spin = !spin;
+    $('spinBtn').setAttribute('aria-pressed', String(spin));
+  });
+  goCam('overview', true);
+
+  // ===========================================================================
+  // Layout overlay and spectrum meter
+  // ===========================================================================
+  const overlay = $('layoutOverlay'), octx = overlay.getContext('2d');
+  function drawOverlay() {
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!$('showLayout').checked) return;
+    octx.fillStyle = 'rgba(255,255,255,0.85)';
+    octx.strokeStyle = 'rgba(0,0,0,0.6)';
+    const dot = (u, v) => { octx.beginPath(); octx.arc(u * 640, v * 400, 2.2, 0, Math.PI * 2); octx.fill(); octx.stroke(); };
+    leds.forEach(l => dot(l.u, l.v));
+    keys.forEach(k => dot(k.u, k.v));
+    if (nanoGroup.visible) {
+      octx.fillStyle = 'rgba(255,214,120,0.95)';
+      panels.forEach(p => { octx.beginPath(); octx.arc(p.u * 640, p.v * 400, 4, 0, Math.PI * 2); octx.fill(); octx.stroke(); });
+    }
+    octx.font = '600 15px "Chakra Petch", sans-serif';
+    octx.fillStyle = 'rgba(255,255,255,0.9)';
+    octx.strokeStyle = 'rgba(0,0,0,0.75)';
+    octx.lineWidth = 3;
+    [['Wall strip', 0.36, 0.1], ['Nanoleaf', 0.02, 0.36], ['Monitor', 0.3, 0.3], ['PC', 0.66, 0.08], ['Keyboard', 0.3, 0.68], ['Mouse', 0.66, 0.78], ['Under desk', 0.02, 0.94]]
+      .forEach(([t, u, v]) => { octx.strokeText(t, u * 640, v * 400); octx.fillText(t, u * 640, v * 400); });
+    octx.lineWidth = 1;
+  }
+  $('showLayout').addEventListener('change', drawOverlay);
+  document.fonts && document.fonts.ready.then(drawOverlay);
+  drawOverlay();
+
+  const meter = $('meter'), mctx = meter.getContext('2d');
+  function drawMeter() {
+    mctx.fillStyle = '#0b0b10';
+    mctx.fillRect(0, 0, meter.width, meter.height);
+    const bw = meter.width / 100;
+    for (let i = 0; i < 100; i++) {
+      const v = Math.max(AUDIO.bytes[i * 2], AUDIO.bytes[i * 2 + 1]);
+      const h = Math.min(1, v / 120) * (meter.height - 4);
+      mctx.fillStyle = i < 3 ? '#ffb36b' : '#8ef5d4';
+      mctx.fillRect(i * bw + 1, meter.height - 2 - h, bw - 2, h);
+    }
+    const lv = isFinite(AUDIO.level) ? AUDIO.level.toFixed(1) + ' dB' : '−∞ dB (silence)';
+    $('meterReadout').textContent = 'level ' + lv + '   ·   ' + AUDIO.status;
+  }
+
+  // ===========================================================================
+  // Audio source UI
+  // ===========================================================================
+  function setAudioMode(mode) {
+    AUDIO.mode = mode;
+    document.querySelectorAll('[data-audio]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.audio === mode)));
+    $('fileBox').hidden = mode !== 'file';
+    $('demoNote').hidden = mode === 'file';
+    if (mode !== 'file') filePause();
+  }
+  document.querySelectorAll('[data-audio]').forEach(b => b.addEventListener('click', () => setAudioMode(b.dataset.audio)));
+
+  $('fileInput').addEventListener('change', async e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    ensureAudioCtx();
+    filePause();
+    $('fileNote').textContent = 'Decoding ' + file.name + '…';
+    try {
+      const buf = await file.arrayBuffer();
+      FILE.buffer = await FILE.ctx.decodeAudioData(buf);
+      FILE.offset = 0;
+      FILE.name = file.name;
+      $('fileNote').textContent = file.name + ' · ' + Math.round(FILE.buffer.duration) + ' s. It stays in your browser; nothing is uploaded.';
+      $('playBtn').disabled = false;
+      filePlay();
+    } catch (err) {
+      $('fileNote').textContent = 'That file could not be decoded. Try an MP3, M4A, OGG or WAV.';
+    }
+  });
+  $('playBtn').addEventListener('click', () => (FILE.playing ? filePause() : filePlay()));
+
+  // ===========================================================================
+  // Scene controls
+  // ===========================================================================
+  let ledGain = 1;
+  $('bloom').addEventListener('input', e => { bloomPass.strength = Number(e.target.value); $('bloomOut').textContent = Number(e.target.value).toFixed(1); });
+  $('roomLight').addEventListener('input', e => {
+    const k = Number(e.target.value) / 100;
+    ambient.intensity = k; hemi.intensity = k;
+    $('roomOut').textContent = e.target.value + '%';
+  });
+  $('ledGain').addEventListener('input', e => { ledGain = Number(e.target.value) / 100; $('ledOut').textContent = e.target.value + '%'; });
+  $('bloomOut').textContent = Number($('bloom').value).toFixed(1);
+  $('showNano').addEventListener('change', e => {
+    nanoGroup.visible = e.target.checked;
+    $('hudLeds').textContent = leds.length + keys.length + (nanoGroup.visible ? panels.length : 0);
+    drawOverlay();
+  });
+
+  // ===========================================================================
+  // Recording
+  // ===========================================================================
+  const REC = { recorder: null, chunks: [], start: 0, blob: null };
+
+  function pickMime() {
+    const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+  }
+
+  function startRecording() {
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      $('recNote').textContent = 'This browser cannot record the 3D view.';
+      return;
+    }
+    const stream = canvas.captureStream(30);
+    if (AUDIO.mode === 'file' && FILE.dest) FILE.dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+    REC.chunks = [];
+    REC.blob = null;
+    REC.recorder = new MediaRecorder(stream, { mimeType: pickMime(), videoBitsPerSecond: 8_000_000 });
+    REC.recorder.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
+    REC.recorder.onstop = () => {
+      REC.blob = new Blob(REC.chunks, { type: 'video/webm' });
+      REC.recorder = null;
+      $('recBtn').textContent = 'Start recording';
+      $('recDot').hidden = true;
+      const mb = (REC.blob.size / 1048576).toFixed(1);
+      $('recTime').textContent = mb + ' MB ready';
+      $('saveBtn').hidden = false;
+      $('recNote').textContent = 'Save the clip, then post it wherever you like.';
+    };
+    REC.recorder.start(250);
+    REC.start = performance.now();
+    $('recBtn').textContent = 'Stop recording';
+    $('recDot').hidden = false;
+    $('saveBtn').hidden = true;
+  }
+
+  $('recBtn').addEventListener('click', () => {
+    if (REC.recorder) REC.recorder.stop();
+    else startRecording();
+  });
+  $('saveBtn').addEventListener('click', () => {
+    if (!REC.blob) return;
+    const name = (currentFx ? currentFx.name : 'effect').replace(/\s+/g, '-') + '-virtual-rig.webm';
+    const url = URL.createObjectURL(REC.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    $('recNote').textContent = 'Downloading ' + name + '.';
+  });
+
+  // ===========================================================================
+  // Main loop
+  // ===========================================================================
+  const stage = $('stage');
+  function resize() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    if (!w || !h) return;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(w, h, false);
+    composer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    const box = $('canvasBox');
+    frame.style.transform = 'scale(' + box.clientWidth / 320 + ')';
+  }
+  new ResizeObserver(resize).observe(stage);
+  new ResizeObserver(resize).observe($('canvasBox'));
+
+  const t0 = performance.now();
+  let lastFrame = t0;
+  function loop(now) {
+    const dt = Math.min(0.1, (now - lastFrame) / 1000);
+    lastFrame = now;
+    updateAudio((now - t0) / 1000);
+    grabCanvas();
+    updateLeds(ledGain);
+
+    if (camTween) {
+      camTween.t = Math.min(1, camTween.t + dt / 0.9);
+      const e = camTween.t < 0.5 ? 2 * camTween.t * camTween.t : 1 - Math.pow(-2 * camTween.t + 2, 2) / 2;
+      camera.position.lerpVectors(camTween.from.pos, camTween.to.pos, e);
+      controls.target.lerpVectors(camTween.from.target, camTween.to.target, e);
+      if (camTween.t >= 1) camTween = null;
+    } else if (spin) {
+      const off = camera.position.clone().sub(controls.target);
+      off.applyAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.12);
+      camera.position.copy(controls.target).add(off);
+    }
+    controls.update();
+    composer.render();
+    drawMeter();
+
+    const statusChip = $('hudAudioChip');
+    const label = AUDIO.mode === 'file' ? (FILE.name ? AUDIO.status : 'choose a file') : AUDIO.status;
+    $('hudAudio').textContent = { psy: 'Psytrance demo', pop: 'Pop demo', silence: 'Silence', file: 'Your music' }[AUDIO.mode] + ' · ' + label;
+    statusChip.classList.toggle('paused', AUDIO.status === 'paused' || AUDIO.status === 'silent');
+
+    if (REC.recorder) {
+      const s = (now - REC.start) / 1000;
+      $('recTime').textContent = s.toFixed(1) + ' s';
+      if (s >= 60) REC.recorder.stop();
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ===========================================================================
+  // Start
+  // ===========================================================================
+  const select = $('fxSelect');
+  EFFECTS.forEach(fx => { const o = document.createElement('option'); o.value = fx.id; o.textContent = fx.name; select.append(o); });
+  select.addEventListener('change', () => {
+    const fx = EFFECTS.find(f => f.id === select.value);
+    if (AUDIO.mode !== 'file') setAudioMode(fx.audio);
+    loadEffect(fx);
+  });
+  select.value = 'ambient';
+  loadEffect(EFFECTS[0]);
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,358 @@
+<head>
+  <title>Psy Ambient Drift</title>
+  <meta description="Calm blacklight psy ambience for working or watching TV. Slow fluorescent lava-lamp glow that follows the music without flashing: each colour listens to its own part of the mix, blobs breathe with the rolling bass, kicks send soft ripples, fireflies drift on the hats, and the mood cools in breakdowns and warms in drops." />
+  <meta publisher="akostkasmith" />
+  <meta property="palette" label="Palette" type="list" values="UV Classic,Goa Neon,Toxic Forest,Acid Pop" default="UV Classic" />
+  <meta property="brightness" label="Brightness" type="number" min="10" max="100" default="85" />
+  <meta property="speed" label="Drift Speed" type="number" min="1" max="10" default="3" />
+  <meta property="reactivity" label="Music Reactivity" type="number" min="0" max="10" default="6" />
+  <meta property="beatPulse" label="Kick Ripples" type="number" min="0" max="10" default="4" />
+  <meta property="fireflies" label="Fireflies on Hi-hats" type="number" min="0" max="10" default="3" />
+  <meta property="sensitivity" label="Audio Sensitivity" type="number" min="1" max="10" default="5" />
+  <meta property="journey" label="Journey Mood (cooler breakdowns, warmer drops)" type="boolean" default="1" />
+</head>
+
+<body style="margin: 0; padding: 0; background: #000;">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+</body>
+
+<script>
+  const canvas = document.getElementById('exCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // ---------------------------------------------------------------------------
+  // Properties. SignalRGB injects each meta property as a global (so no function
+  // or variable here may share a property's name); in a normal browser they
+  // don't exist, so fall back to the meta defaults.
+  // ---------------------------------------------------------------------------
+  document.querySelectorAll('meta[property]').forEach(m => {
+    const k = m.getAttribute('property');
+    if (typeof window[k] === 'undefined') window[k] = m.getAttribute('default');
+  });
+  const num = k => Number(window[k]);
+  const on = k => { const v = window[k]; return v === true || v === 1 || v === '1' || v === 'true'; };
+
+  // No engine means we're in a browser: run a simulated psytrance track.
+  const SIM = typeof engine === 'undefined';
+  if (SIM) window.engine = { audio: { freq: new Array(200).fill(0), level: -100, density: 0 } };
+
+  // ---------------------------------------------------------------------------
+  // Palettes (shared with Psy Blacklight Journey)
+  // ---------------------------------------------------------------------------
+  const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const PALETTES = {};
+  for (const [name, p] of Object.entries({
+    'UV Classic':   { bg: '#05000c', uv: '#6a00ff', neon: ['#39ff14', '#ff00e6', '#00f0ff', '#fff200', '#ff6a00'] },
+    'Goa Neon':     { bg: '#08000a', uv: '#b000ff', neon: ['#ff0090', '#ffe600', '#00ff9c', '#ff5500', '#00b3ff'] },
+    'Toxic Forest': { bg: '#000805', uv: '#3c00ff', neon: ['#7fff00', '#00ff66', '#d4ff00', '#00ffd0', '#a000ff'] },
+    'Acid Pop':     { bg: '#060006', uv: '#ff00c8', neon: ['#ffff00', '#00ffff', '#ff3300', '#66ff00', '#ff00ff'] },
+  })) PALETTES[name] = { bg: hex(p.bg), uv: hex(p.uv), neon: p.neon.map(hex) };
+  const pal = () => PALETTES[window.palette] || PALETTES['UV Classic'];
+
+  const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+  const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${clamp(a)})`;
+  const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+  const ease = (v, target, rate, dt) => v + (target - v) * Math.min(1, dt * rate);
+
+  function glow(x, y, r, c, a) {
+    if (a <= 0.004 || r <= 0) return;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, rgba(c, a));
+    g.addColorStop(0.5, rgba(c, a * 0.75)); // broad, solid core reads better on LEDs
+    g.addColorStop(1, rgba(c, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Audio analysis: band energies plus kick and hi-hat onsets.
+  // ---------------------------------------------------------------------------
+  const BANDS = { kick: [0, 6], bass: [3, 16], mid: [16, 90], high: [90, 200] };
+  // One range per blob: sub, bass, low mids, acid / high mids, hats.
+  const BLOB_BANDS = [[0, 4], [4, 16], [16, 45], [45, 100], [100, 200]];
+  const A = {
+    peak: { kick: 0.05, bass: 0.05, mid: 0.05, high: 0.05 },
+    kick: 0, bass: 0, mid: 0, high: 0, lvl: 0,
+    blobPeak: [0.05, 0.05, 0.05, 0.05, 0.05], blob: [0, 0, 0, 0, 0],
+    kHist: [0, 0, 0], hHist: [0, 0, 0], lastKick: -99, lastHat: -99,
+    fastE: 0, slowE: 0, hiFast: 0, hiSlow: 0, riseTime: 0,
+  };
+
+  function analyse(t, dt) {
+    // SignalRGB sends the spectrum as 200 unsigned bytes (0-255), all 0 in silence.
+    const f = new Uint8Array(engine.audio.freq);
+    const sens = num('sensitivity');
+    const gain = 0.6 + sens * 0.08;
+
+    // Band energies, normalised against a slowly decaying peak so any volume works.
+    const band = ([a, b], peaks, k) => {
+      let s = 0;
+      for (let i = a; i < b; i++) s += Math.abs(f[i] || 0);
+      const raw = s / (b - a) / 255;
+      peaks[k] = Math.max(raw, peaks[k] * Math.exp(-dt * 0.12), 0.03);
+      return Math.min(1, raw / peaks[k] * gain);
+    };
+    for (const k in BANDS) A[k] = band(BANDS[k], A.peak, k);
+    BLOB_BANDS.forEach((r, i) => { A.blob[i] = band(r, A.blobPeak, i); });
+    // SignalRGB's level runs about -8..0 dB with music and -Infinity in silence, so
+    // loudness comes from the spectrum bytes instead.
+    let tot = 0;
+    for (let i = 0; i < f.length; i++) tot += f[i];
+    A.lvlPeak = Math.max(tot / f.length, (A.lvlPeak || 2) * Math.exp(-dt * 0.05), 2);
+    A.lvl = clamp(tot / f.length / A.lvlPeak);
+
+    // Kick onset: sharp rise in the sub band.
+    const kMin = Math.min(...A.kHist);
+    A.kHist.shift(); A.kHist.push(A.kick);
+    if (A.kick - kMin > 0.34 - sens * 0.02 && A.kick > 0.45 && t - A.lastKick > 0.25) {
+      A.lastKick = t;
+      onKick();
+    }
+
+    // Hi-hat onset.
+    const hMin = Math.min(...A.hHist);
+    A.hHist.shift(); A.hHist.push(A.high);
+    if (A.high - hMin > 0.22 - sens * 0.012 && A.high > 0.35 && t - A.lastHat > 0.08) {
+      A.lastHat = t;
+      onHat(t);
+    }
+
+    // Energy trends for build-up detection.
+    const e = (A.kick + A.bass + A.mid + A.high) / 4;
+    A.fastE = ease(A.fastE, e, 3, dt);
+    A.slowE = ease(A.slowE, e, 0.15, dt);
+    A.hiFast = ease(A.hiFast, A.high, 2, dt);
+    A.hiSlow = ease(A.hiSlow, A.high, 0.2, dt);
+    const rising = A.hiFast > A.hiSlow * 1.15 + 0.03 || A.fastE > A.slowE * 1.2 + 0.03;
+    A.riseTime = rising ? A.riseTime + dt : Math.max(0, A.riseTime - dt * 0.5);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Journey mood: same section detection as Psy Blacklight Journey, but it only
+  // steers a slowly blended mood value (0 = cool and dim, 1 = warm and full).
+  // ---------------------------------------------------------------------------
+  const J = { state: 'GROOVE', since: 0, build: 0 };
+
+  function enter(s, t) {
+    J.state = s; J.since = t;
+    if (s === 'BREAKDOWN') A.riseTime = 0;
+    if (s === 'BUILDUP') J.build = 0;
+  }
+
+  function updateJourney(t, dt) {
+    const kickGone = t - A.lastKick > 1.3;
+    switch (J.state) {
+      case 'GROOVE':
+        if (kickGone) enter('BREAKDOWN', t);
+        break;
+      case 'DROP':
+        if (kickGone) enter('BREAKDOWN', t);
+        else if (t - J.since > 16) enter('GROOVE', t);
+        break;
+      case 'BREAKDOWN':
+        if (!kickGone) enter(t - J.since > 3 ? 'DROP' : 'GROOVE', t);
+        else if (A.riseTime > 1.2) enter('BUILDUP', t);
+        break;
+      case 'BUILDUP':
+        if (!kickGone) enter('DROP', t);
+        else if (t - J.since > 25) enter('BREAKDOWN', t);
+        else J.build = Math.min(1, J.build + dt / 8 * (0.5 + A.high));
+        break;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Smoothed visual state. Every audio input passes through slow easing so
+  // nothing on screen ever jumps.
+  // ---------------------------------------------------------------------------
+  const S = { energy: 0, mood: 0.6, phase: 0, blob: [0, 0, 0, 0, 0], breath: 0, loud: 1, quiet: 0 };
+  const motes = [], ripples = [];
+
+  function onKick() {
+    if (num('beatPulse') > 0 && ripples.length < 4) ripples.push({ r: 10, life: 1 });
+  }
+
+  function onHat(t) {
+    const rate = num('fireflies') / 10;
+    if (rate <= 0 || motes.length >= 12 || t - (S.lastMote || 0) < 0.6) return;
+    if (Math.random() > rate * 0.35) return;
+    S.lastMote = t;
+    const p = pal();
+    const a = Math.random() * Math.PI * 2;
+    motes.push({
+      x: 20 + Math.random() * (W - 40), y: 20 + Math.random() * (H - 40),
+      vx: Math.cos(a) * 6, vy: Math.sin(a) * 6,
+      c: p.neon[(Math.random() * p.neon.length) | 0],
+      age: 0, life: 2.5 + Math.random() * 2, r: 7 + Math.random() * 6,
+    });
+  }
+
+  function updateSmoothing(dt) {
+    const react = num('reactivity') / 10;
+    S.energy = ease(S.energy, A.lvl * react, 0.5, dt); // ~2s to settle
+
+    // Frequency-mapped blobs: rise in ~0.15s, fall in ~0.5s, so they glow rather than blink.
+    for (let i = 0; i < 5; i++) S.blob[i] = ease(S.blob[i], A.blob[i], A.blob[i] > S.blob[i] ? 6 : 1.8, dt);
+
+    // Bass breathing follows the rolling bassline at ~0.3s.
+    S.breath = ease(S.breath, A.bass, 3.3, dt);
+
+    // Loud/quiet range, relative to the track's recent loudest part so any volume works.
+    // After a few seconds without music, go back to full ambient.
+    S.lvlAvg = ease(S.lvlAvg || 0, A.lvl, 2, dt);
+    S.lvlPeak = Math.max(S.lvlAvg, (S.lvlPeak || 0) * Math.exp(-dt * 0.05), 0.1);
+    S.quiet = A.lvl < 0.05 ? S.quiet + dt : 0;
+    S.loud = ease(S.loud, S.quiet > 3 ? 1 : S.lvlAvg / S.lvlPeak, 1.2, dt);
+
+    const silent = A.lvl < 0.05;
+    let target = 0.6;
+    if (on('journey') && !silent) {
+      target = { GROOVE: 0.6, BREAKDOWN: 0.15, BUILDUP: 0.2 + 0.4 * J.build, DROP: 0.9 }[J.state];
+    }
+    S.mood = ease(S.mood, 0.5 + (target - 0.5) * (0.4 + 0.6 * react), 1 / 3, dt); // ~3s blends
+  }
+
+  function render(t, dt) {
+    const p = pal();
+    const m = S.mood;
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = rgba(p.bg, 1);
+    ctx.fillRect(0, 0, W, H);
+
+    // Wider loud/quiet range: quiet passages sink, full sections lift.
+    const react = num('reactivity') / 10;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = num('brightness') / 100 * (1 - 0.5 * react * (1 - S.loud));
+
+    // Drift speeds up a touch with the music, never fast.
+    S.phase += dt * (0.015 + num('speed') * 0.012) * (0.7 + 0.5 * m + 0.4 * S.energy);
+    const ph = S.phase;
+
+    // Deep UV base glow, slowly wandering.
+    glow(W / 2 + Math.sin(ph * 0.7) * 60, H / 2 + Math.cos(ph * 0.5) * 30, 240, p.uv, 0.3 + 0.15 * (1 - m) + 0.1 * S.energy);
+
+    // Lava-lamp blobs, one pure neon each (blending opposite neons goes muddy on LEDs).
+    // Each blob listens to its own frequency range and they all breathe with the bass.
+    // Low mood lets the UV base dominate (cool); high mood brings the neons up.
+    const blobA = 0.3 + 0.35 * m;
+    const breathe = 1 + 0.2 * react * S.breath;
+    for (let i = 0; i < 5; i++) {
+      const b = S.blob[i] * react;
+      const x = W / 2 + Math.sin(ph * (0.53 + i * 0.11) + i * 1.9) * W * 0.45;
+      const y = H / 2 + Math.cos(ph * (0.41 + i * 0.13) + i * 2.7) * H * 0.45;
+      const r = (55 + 20 * Math.sin(ph * 0.9 + i * 1.3) + 50 * b) * breathe;
+      glow(x, y, r, p.neon[i], (blobA + 0.8 * b) * (0.8 + 0.2 * Math.sin(ph * 0.8 + i * 2.1)));
+    }
+
+    // Kick ripples: soft, wide UV rings drifting out from the centre over ~1.2s.
+    const rp = num('beatPulse') / 10;
+    const rippleC = mix(p.uv, [255, 255, 255], 0.15);
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const q = ripples[i];
+      q.r += dt * 130;
+      q.life -= dt / 1.2;
+      if (q.life <= 0) { ripples.splice(i, 1); continue; }
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.max(0, q.r - 30), W / 2, H / 2, q.r + 30);
+      g.addColorStop(0, rgba(rippleC, 0));
+      g.addColorStop(0.5, rgba(rippleC, q.life * q.life * rp * 0.45));
+      g.addColorStop(1, rgba(rippleC, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Fireflies: fade in, wander, fade out.
+    for (let i = motes.length - 1; i >= 0; i--) {
+      const f = motes[i];
+      f.age += dt;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      const k = Math.sin(Math.PI * clamp(f.age / f.life));
+      glow(f.x, f.y, f.r * 2.2, f.c, k * k * 0.25);
+      glow(f.x, f.y, f.r * 0.7, f.c, k * k * 0.55);
+      if (f.age >= f.life) motes.splice(i, 1);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Browser preview: a fake 145 BPM psytrance track looping through
+  // 8 bars groove -> 4 bars breakdown -> 4 bars build-up -> back in.
+  // ---------------------------------------------------------------------------
+  const SIM_BEAT = 60 / 145;
+  function simAudio(t) {
+    const bp = t / SIM_BEAT, beat = Math.floor(bp), ph = bp - beat;
+    const inLoop = beat % 64;
+    const section = inLoop < 32 ? 'groove' : inLoop < 48 ? 'breakdown' : 'buildup';
+    const six = Math.floor(ph * 4), sph = ph * 4 - six;
+    let kick = 0, bass = 0, hat = 0, acid = 0, pad = 0, riser = 0, snare = 0;
+    if (section === 'groove') {
+      kick = Math.exp(-ph * 14);
+      if (six > 0) bass = Math.exp(-sph * 6) * 0.9;
+      hat = six === 2 ? Math.exp(-sph * 10) : 0.15 * Math.exp(-sph * 20);
+      acid = 0.5 + 0.5 * Math.sin(t * 0.7);
+    } else if (section === 'breakdown') {
+      pad = 0.6 + 0.2 * Math.sin(t * 0.5);
+      hat = six === 2 && beat % 2 === 0 ? 0.4 * Math.exp(-sph * 8) : 0;
+    } else {
+      const prog = (inLoop + ph - 48) / 16;
+      const div = prog < 0.5 ? 1 : prog < 0.75 ? 2 : 4;
+      pad = 0.4;
+      riser = prog;
+      snare = Math.exp(-((ph * div) % 1) * 8) * (0.4 + 0.6 * prog);
+    }
+    const f = engine.audio.freq;
+    const acidC = 25 + acid * 55;
+    for (let i = 0; i < 200; i++) {
+      let v = Math.random() * 4;
+      if (i < 6) v += kick * 120;
+      if (i >= 3 && i < 16) v += bass * 90 * Math.exp(-Math.abs(i - 8) / 5);
+      if (i >= 16 && i < 90) {
+        if (acid) v += 70 * Math.exp(-Math.abs(i - acidC) / 6);
+        v += pad * 40 * Math.exp(-Math.abs(i - 40) / 25) + snare * 60;
+      }
+      if (i >= 90) v += hat * 80 + riser * 60 * Math.random() + snare * 50;
+      f[i] = Math.min(127, v) | 0;
+    }
+    // Overall loudness like a real mix: full groove, quieter breakdown, rising build-up.
+    const base = section === 'groove' ? 0.8 : section === 'breakdown' ? 0.4 : 0.4 + 0.35 * riser;
+    engine.audio.level = -70 + 65 * Math.min(1, base + 0.15 * kick);
+    return section;
+  }
+
+  let hudEl = null;
+  function hud(section) {
+    if (!hudEl) {
+      canvas.style.cssText = 'width:100%;max-width:960px;height:auto;display:block';
+      hudEl = document.createElement('pre');
+      hudEl.style.cssText = 'color:#ccc;font:13px monospace;margin:8px';
+      document.body.appendChild(hudEl);
+    }
+    const bar = v => '#'.repeat(Math.round(v * 20)).padEnd(20, '.');
+    hudEl.textContent =
+      `SIMULATED AUDIO (browser preview)   sim section: ${section}\n` +
+      `journey: ${J.state.padEnd(9)} mood ${S.mood.toFixed(2)}  energy ${S.energy.toFixed(2)}  breath ${S.breath.toFixed(2)}  loud ${S.loud.toFixed(2)}  ripples ${ripples.length}  fireflies ${motes.length}\n` +
+      `kick ${bar(A.kick)}  bass ${bar(A.bass)}\nmid  ${bar(A.mid)}  high ${bar(A.high)}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  let last = performance.now() / 1000;
+  const t0 = last;
+  function update() {
+    const now = performance.now() / 1000;
+    const dt = Math.min(0.1, now - last);
+    last = now;
+    const t = now - t0;
+    const section = SIM ? simAudio(t) : null;
+    analyse(t, dt);
+    updateJourney(t, dt);
+    updateSmoothing(dt);
+    render(t, dt);
+    if (SIM) hud(section);
+    window.requestAnimationFrame(update);
+  }
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  window.requestAnimationFrame(update);
+</script>
