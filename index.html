@@ -84,7 +84,9 @@
 
   .canvasbox { position: relative; width: 100%; aspect-ratio: 16 / 10; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #000; }
   .canvasbox iframe { position: absolute; left: 0; top: 0; width: 320px; height: 200px; border: 0; transform-origin: 0 0; }
-  .canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .canvasbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; touch-action: none; }
+  .canvasbox canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .layout-edit { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 
   .rec { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .rec .time { font: 13px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -200,6 +202,11 @@
         <canvas id="layoutOverlay" width="640" height="400"></canvas>
       </div>
       <label class="toggle"><input type="checkbox" id="showLayout" checked> Show where each device samples the canvas</label>
+      <label class="toggle"><input type="checkbox" id="editLayout"> Edit layout</label>
+      <div class="layout-edit" id="layoutHelp" hidden>
+        <p class="note">Drag a device to move it and drag its corner to resize it, like SignalRGB's Layouts page. With the canvas focused, arrow keys move the selected device; hold Shift to resize. Your layout is saved in this browser.</p>
+        <button type="button" class="btn small" id="resetLayout">Reset layout</button>
+      </div>
       <p class="note error" id="fxError" hidden></p>
     </section>
 
@@ -662,10 +669,10 @@
   // and the room light it feeds.
   // ===========================================================================
   const leds = [];
-  const add = (x, y, z, u, v, group) => leds.push({ pos: new THREE.Vector3(x, y, z), u, v, group });
+  const add = (x, y, z, u, v, group, device) => leds.push({ pos: new THREE.Vector3(x, y, z), u, v, group, device });
 
   // Wall strip behind the desk (stops short of the Nanoleaf panels on the left)
-  for (let i = 0; i < 34; i++) { const x = -0.34 + 1.34 * i / 33; add(x, 1.6, -0.745, (x + 1) / 2, 0.04, 'wall'); }
+  for (let i = 0; i < 34; i++) { const x = -0.34 + 1.34 * i / 33; add(x, 1.6, -0.745, (x + 1) / 2, 0.04, 'wall', 'wall'); }
   // Monitor backlight: loop around the back of the monitor, facing the wall
   {
     const pts = [], w = 0.6, h = 0.32, n = 40;
@@ -678,32 +685,32 @@
       else { lx = -w / 2; ly = -h / 2 + (d - 2 * w - h); }
       pts.push([lx, ly]);
     }
-    pts.forEach(([lx, ly]) => add(-0.2 + lx, 1.1 + ly, -0.318, 0.14 + (lx / w + 0.5) * 0.42, 0.12 + (0.5 - ly / h) * 0.34, 'monitor'));
+    pts.forEach(([lx, ly]) => add(-0.2 + lx, 1.1 + ly, -0.318, 0.14 + (lx / w + 0.5) * 0.42, 0.12 + (0.5 - ly / h) * 0.34, 'monitor', 'monitor'));
   }
   // Fans
-  const ring = (cx, cy, cz, r, n, cu, cv, ru, rv, plane, group) => {
+  const ring = (cx, cy, cz, r, n, cu, cv, ru, rv, plane, group, device) => {
     for (let i = 0; i < n; i++) {
       const a = i / n * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
-      if (plane === 'xy') add(cx + ca * r, cy + sa * r, cz, cu + ca * ru, cv - sa * rv, group);
-      else add(cx, cy + sa * r, cz + ca * r, cu + ca * ru, cv - sa * rv, group);
+      if (plane === 'xy') add(cx + ca * r, cy + sa * r, cz, cu + ca * ru, cv - sa * rv, group, device);
+      else add(cx, cy + sa * r, cz + ca * r, cu + ca * ru, cv - sa * rv, group, device);
     }
   };
-  [0.86, 0.99, 1.12].forEach((y, i) => ring(0.68, y, 0.168, 0.056, 30, 0.9, 0.62 - i * 0.2, 0.045, 0.07, 'xy', 'pc'));
-  ring(0.68, 1.12, -0.268, 0.05, 28, 0.66, 0.2, 0.04, 0.065, 'xy', 'pc');
-  ring(0.718, 1.08, -0.12, 0.042, 24, 0.76, 0.3, 0.03, 0.05, 'yz', 'pc');
+  [0.86, 0.99, 1.12].forEach((y, i) => ring(0.68, y, 0.168, 0.056, 30, 0.9, 0.62 - i * 0.2, 0.045, 0.07, 'xy', 'pc', 'frontFans'));
+  ring(0.68, 1.12, -0.268, 0.05, 28, 0.66, 0.2, 0.04, 0.065, 'xy', 'pc', 'rearFan');
+  ring(0.718, 1.08, -0.12, 0.042, 24, 0.76, 0.3, 0.03, 0.05, 'yz', 'pc', 'cooler');
   // RAM light bars
-  for (let k = 0; k < 4; k++) for (let i = 0; i < 8; i++) add(0.733, 1.015 + i * 0.015, -0.02 + k * 0.016, 0.7 + k * 0.022, 0.31 - i * 0.022, 'pc');
+  for (let k = 0; k < 4; k++) for (let i = 0; i < 8; i++) add(0.733, 1.015 + i * 0.015, -0.02 + k * 0.016, 0.7 + k * 0.022, 0.31 - i * 0.022, 'pc', 'ram');
   // GPU edge strip and case floor strip
-  for (let i = 0; i < 18; i++) { const k = i / 17; add(0.658, 0.92, -0.24 + k * 0.32, 0.63 + k * 0.3, 0.5, 'pc'); }
-  for (let i = 0; i < 16; i++) { const k = i / 15; add(0.6, 0.768, -0.25 + k * 0.4, 0.62 + k * 0.33, 0.7, 'pc'); }
+  for (let i = 0; i < 18; i++) { const k = i / 17; add(0.658, 0.92, -0.24 + k * 0.32, 0.63 + k * 0.3, 0.5, 'pc', 'gpu'); }
+  for (let i = 0; i < 16; i++) { const k = i / 15; add(0.6, 0.768, -0.25 + k * 0.4, 0.62 + k * 0.33, 0.7, 'pc', 'caseStrip'); }
   // Mouse underglow + logo
   for (let i = 0; i < 10; i++) {
     const a = i / 10 * Math.PI * 2;
-    add(0.22 + Math.cos(a) * 0.03, 0.748, 0.21 + Math.sin(a) * 0.05, 0.69 + Math.cos(a) * 0.02, 0.84 + Math.sin(a) * 0.05, 'desk');
+    add(0.22 + Math.cos(a) * 0.03, 0.748, 0.21 + Math.sin(a) * 0.05, 0.69 + Math.cos(a) * 0.02, 0.84 + Math.sin(a) * 0.05, 'desk', 'mouse');
   }
-  add(0.22, 0.778, 0.235, 0.69, 0.86, 'desk');
+  add(0.22, 0.778, 0.235, 0.69, 0.86, 'desk', 'mouse');
   // Under-desk strip along the front edge
-  for (let i = 0; i < 48; i++) { const k = i / 47; add(-0.98 + 1.96 * k, 0.703, 0.37, k, 0.97, 'floor'); }
+  for (let i = 0; i < 48; i++) { const k = i / 47; add(-0.98 + 1.96 * k, 0.703, 0.37, k, 0.97, 'floor', 'underDesk'); }
 
   const ledGeo = new THREE.SphereGeometry(0.0085, 10, 8);
   const ledMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -769,6 +776,47 @@
   for (let i = 1; i < 4; i++) addPanel(-0.9 + i * NANO_SIDE / 2, 1.34 + NANO_H, i % 2 === 1);
 
   $('hudLeds').textContent = leds.length + keys.length + panels.length;
+
+  // ===========================================================================
+  // Canvas layout. Like SignalRGB's Layouts page, each device covers a
+  // rectangle on the effect canvas. Every sample point keeps its position
+  // inside its device's rectangle, so moving or resizing a device moves where
+  // all of its LEDs read from.
+  // ===========================================================================
+  const DEVICE_NAMES = {
+    wall: 'Wall strip', nanoleaf: 'Nanoleaf', monitor: 'Monitor', frontFans: 'Front fans', rearFan: 'Rear fan',
+    cooler: 'CPU cooler', ram: 'RAM', gpu: 'GPU', caseStrip: 'Case strip', keyboard: 'Keyboard', mouse: 'Mouse', underDesk: 'Under desk',
+  };
+  const MIN_SIZE = 0.03;
+  const devices = {};
+  keys.forEach(k => { k.device = 'keyboard'; });
+  panels.forEach(p => { p.device = 'nanoleaf'; });
+  for (const p of [...leds, ...keys, ...panels]) (devices[p.device] ||= { id: p.device, name: DEVICE_NAMES[p.device], pts: [] }).pts.push(p);
+  for (const d of Object.values(devices)) {
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    d.pts.forEach(p => { x0 = Math.min(x0, p.u); y0 = Math.min(y0, p.v); x1 = Math.max(x1, p.u); y1 = Math.max(y1, p.v); });
+    let w = x1 - x0, h = y1 - y0;
+    if (w < MIN_SIZE) { x0 -= (MIN_SIZE - w) / 2; w = MIN_SIZE; }
+    if (h < MIN_SIZE) { y0 -= (MIN_SIZE - h) / 2; h = MIN_SIZE; }
+    d.def = { x: x0, y: y0, w, h };
+    d.rect = { ...d.def };
+    d.pts.forEach(p => { p.lu = (p.u - x0) / w; p.lv = (p.v - y0) / h; });
+  }
+  function applyLayout() {
+    for (const d of Object.values(devices)) d.pts.forEach(p => { p.u = d.rect.x + p.lu * d.rect.w; p.v = d.rect.y + p.lv * d.rect.h; });
+  }
+  const LAYOUT_KEY = 'virtual-rgb-rig-layout-v1';
+  function saveLayout() {
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(Object.fromEntries(Object.values(devices).map(d => [d.id, d.rect])))); } catch (e) { /* storage unavailable */ }
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
+    if (saved) for (const id in saved) {
+      const r = saved[id];
+      if (devices[id] && r && [r.x, r.y, r.w, r.h].every(Number.isFinite)) devices[id].rect = { x: r.x, y: r.y, w: Math.max(MIN_SIZE, r.w), h: Math.max(MIN_SIZE, r.h) };
+    }
+  } catch (e) { /* storage unavailable or corrupt: keep the default layout */ }
+  applyLayout();
 
   // Light spill: each group of LEDs tints the room through a point light.
   const groupLights = {
@@ -883,26 +931,119 @@
   // Layout overlay and spectrum meter
   // ===========================================================================
   const overlay = $('layoutOverlay'), octx = overlay.getContext('2d');
+  const OW = overlay.width, OH = overlay.height, HANDLE = 14;
+  const editing = () => $('editLayout').checked;
+  const visibleDevices = () => Object.values(devices).filter(d => d.id !== 'nanoleaf' || nanoGroup.visible);
+  let selectedId = null;
+
   function drawOverlay() {
-    octx.clearRect(0, 0, overlay.width, overlay.height);
-    if (!$('showLayout').checked) return;
-    octx.fillStyle = 'rgba(255,255,255,0.85)';
+    octx.clearRect(0, 0, OW, OH);
+    if (!$('showLayout').checked && !editing()) return;
+    const list = visibleDevices();
+    if (editing()) {
+      for (const d of list) {
+        const r = d.rect, sel = d.id === selectedId;
+        octx.fillStyle = sel ? 'rgba(142,245,212,0.22)' : 'rgba(255,255,255,0.08)';
+        octx.fillRect(r.x * OW, r.y * OH, r.w * OW, r.h * OH);
+        octx.lineWidth = sel ? 3 : 1.5;
+        octx.strokeStyle = sel ? '#8ef5d4' : 'rgba(255,255,255,0.75)';
+        octx.strokeRect(r.x * OW, r.y * OH, r.w * OW, r.h * OH);
+        octx.fillStyle = sel ? '#8ef5d4' : 'rgba(255,255,255,0.9)';
+        octx.fillRect((r.x + r.w) * OW - HANDLE / 2, (r.y + r.h) * OH - HANDLE / 2, HANDLE, HANDLE);
+      }
+    }
+    octx.lineWidth = 1;
     octx.strokeStyle = 'rgba(0,0,0,0.6)';
-    const dot = (u, v) => { octx.beginPath(); octx.arc(u * 640, v * 400, 2.2, 0, Math.PI * 2); octx.fill(); octx.stroke(); };
-    leds.forEach(l => dot(l.u, l.v));
-    keys.forEach(k => dot(k.u, k.v));
-    if (nanoGroup.visible) {
-      octx.fillStyle = 'rgba(255,214,120,0.95)';
-      panels.forEach(p => { octx.beginPath(); octx.arc(p.u * 640, p.v * 400, 4, 0, Math.PI * 2); octx.fill(); octx.stroke(); });
+    const dot = (u, v, rad) => { octx.beginPath(); octx.arc(u * OW, v * OH, rad, 0, Math.PI * 2); octx.fill(); octx.stroke(); };
+    for (const d of list) {
+      octx.fillStyle = d.id === 'nanoleaf' ? 'rgba(255,214,120,0.95)' : 'rgba(255,255,255,0.85)';
+      d.pts.forEach(p => dot(p.u, p.v, d.id === 'nanoleaf' ? 4 : 2.2));
     }
     octx.font = '600 15px "Chakra Petch", sans-serif';
-    octx.fillStyle = 'rgba(255,255,255,0.9)';
-    octx.strokeStyle = 'rgba(0,0,0,0.75)';
+    octx.fillStyle = 'rgba(255,255,255,0.95)';
+    octx.strokeStyle = 'rgba(0,0,0,0.8)';
     octx.lineWidth = 3;
-    [['Wall strip', 0.36, 0.1], ['Nanoleaf', 0.02, 0.36], ['Monitor', 0.3, 0.3], ['PC', 0.66, 0.08], ['Keyboard', 0.3, 0.68], ['Mouse', 0.66, 0.78], ['Under desk', 0.02, 0.94]]
-      .forEach(([t, u, v]) => { octx.strokeText(t, u * 640, v * 400); octx.fillText(t, u * 640, v * 400); });
+    for (const d of list) {
+      const x = Math.max(4, Math.min(OW - 90, d.rect.x * OW + 3)), y = Math.max(16, d.rect.y * OH - 4);
+      octx.strokeText(d.name, x, y);
+      octx.fillText(d.name, x, y);
+    }
     octx.lineWidth = 1;
   }
+
+  // Dragging devices around the canvas preview.
+  let drag = null;
+  const toUV = e => { const b = overlay.getBoundingClientRect(); return { u: (e.clientX - b.left) / b.width, v: (e.clientY - b.top) / b.height }; };
+  function hitTest(u, v) {
+    const list = visibleDevices();
+    const hx = HANDLE / OW, hy = HANDLE / OH;
+    // Selected device first, then the smallest box under the pointer, so small devices inside big ones stay reachable.
+    const order = list.slice().sort((a, b) => (b.id === selectedId) - (a.id === selectedId) || a.rect.w * a.rect.h - b.rect.w * b.rect.h);
+    let nearest = null, best = Infinity;
+    for (const d of order) {
+      const r = d.rect, du = Math.abs(u - (r.x + r.w)) / hx, dv = Math.abs(v - (r.y + r.h)) / hy;
+      if (du <= 1 && dv <= 1 && du * du + dv * dv < best) { best = du * du + dv * dv; nearest = d; }
+    }
+    if (nearest) return { d: nearest, mode: 'resize' };
+    for (const d of order) {
+      const r = d.rect;
+      if (u >= r.x && u <= r.x + r.w && v >= r.y && v <= r.y + r.h) return { d, mode: 'move' };
+    }
+    return null;
+  }
+  function setRect(d, r) {
+    const w = Math.max(MIN_SIZE, Math.min(1.5, r.w)), h = Math.max(MIN_SIZE, Math.min(1.5, r.h));
+    d.rect = { w, h, x: Math.max(-w / 2, Math.min(1 - w / 2, r.x)), y: Math.max(-h / 2, Math.min(1 - h / 2, r.y)) };
+    applyLayout();
+    drawOverlay();
+  }
+  overlay.addEventListener('pointerdown', e => {
+    if (!editing()) return;
+    const { u, v } = toUV(e), hit = hitTest(u, v);
+    selectedId = hit ? hit.d.id : null;
+    if (hit) { drag = { ...hit, u, v, start: { ...hit.d.rect } }; overlay.setPointerCapture(e.pointerId); }
+    drawOverlay();
+  });
+  overlay.addEventListener('pointermove', e => {
+    if (!editing()) return;
+    const { u, v } = toUV(e);
+    if (!drag) {
+      const hit = hitTest(u, v);
+      overlay.style.cursor = hit ? (hit.mode === 'resize' ? 'nwse-resize' : 'move') : 'default';
+      return;
+    }
+    const s = drag.start, du = u - drag.u, dv = v - drag.v;
+    setRect(drag.d, drag.mode === 'move' ? { ...s, x: s.x + du, y: s.y + dv } : { ...s, w: s.w + du, h: s.h + dv });
+  });
+  const endDrag = () => { if (drag) { drag = null; saveLayout(); } };
+  overlay.addEventListener('pointerup', endDrag);
+  overlay.addEventListener('pointercancel', endDrag);
+  overlay.addEventListener('keydown', e => {
+    if (!editing() || !selectedId || !e.key.startsWith('Arrow')) return;
+    e.preventDefault();
+    const d = devices[selectedId], r = d.rect, step = 0.01;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    setRect(d, e.shiftKey ? { ...r, w: r.w + dx, h: r.h + dy } : { ...r, x: r.x + dx, y: r.y + dy });
+    saveLayout();
+  });
+
+  $('editLayout').addEventListener('change', e => {
+    const on = e.target.checked;
+    overlay.style.pointerEvents = on ? 'auto' : 'none';
+    overlay.tabIndex = on ? 0 : -1;
+    overlay.setAttribute('aria-label', on ? 'Device layout editor' : '');
+    overlay.style.cursor = 'default';
+    $('layoutHelp').hidden = !on;
+    if (!on) selectedId = null;
+    drawOverlay();
+  });
+  $('resetLayout').addEventListener('click', () => {
+    for (const d of Object.values(devices)) d.rect = { ...d.def };
+    applyLayout();
+    try { localStorage.removeItem(LAYOUT_KEY); } catch (e) { /* storage unavailable */ }
+    drawOverlay();
+  });
   $('showLayout').addEventListener('change', drawOverlay);
   document.fonts && document.fonts.ready.then(drawOverlay);
   drawOverlay();

@@ -12,6 +12,7 @@ Preview [SignalRGB](https://signalrgb.com) effects on a 3D desk setup in your br
 - **Try the effects you already have:** load SignalRGB's library effects or your own straight from your PC (see below).
 - **Drive it with real music:** use whatever your computer is playing, an audio file, a microphone or line-in, or the built-in demo tracks.
 - **Adjust settings live:** every effect's own sliders, colours and switches appear in the side panel, as they do in SignalRGB.
+- **Arrange your devices on the canvas:** turn on **Edit layout** under the canvas preview, then drag each of the 12 devices to move it or drag its corner to resize it, like SignalRGB's Layouts page. Match your real setup or try new arrangements; the layout is saved in your browser.
 - **Record a clip:** save a WebM video of the 3D view (with sound when you use real audio) to share on Discord or anywhere else.
 - **Look around:** drag to orbit, or use the Overview, PC, Keyboard and Wall cameras and a slow orbit.
 
@@ -45,7 +46,7 @@ SignalRGB runs each effect as a small web page that draws on a 320 × 200 canvas
 
 1. The effect loads unmodified into a hidden 320 × 200 frame.
 2. The page gives it what SignalRGB would: an `engine.audio` object, its settings as global variables, and calls to its `on<setting>Changed()` and `onEngineReady()` hooks.
-3. Every frame, each virtual LED samples its own spot on the effect's canvas. Tick **Show where each device samples the canvas** to see the layout.
+3. Every frame, each virtual LED samples its own spot on the effect's canvas. Each device covers a rectangle on the canvas and its LEDs keep their positions inside it, so moving or resizing a device in **Edit layout** moves where all of its LEDs read from.
 
 It's a single `index.html` using [three.js](https://threejs.org) for the 3D scene.
 
